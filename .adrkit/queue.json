@@ -1,0 +1,51 @@
+{
+  "version": "1",
+  "asOf": "2026-08-30",
+  "corpusFingerprint": "6bf935fa509dcd46ac92b090e6b5b91fa6b2cd8034aba1b271ac7915e2a197be",
+  "totalItems": 2,
+  "totalCorpusFindings": 0,
+  "itemsWithFindings": 0,
+  "items": [
+    {
+      "id": "0011",
+      "title": "Model race weekends as rounds with sessions and open volunteer signup",
+      "sourcePath": "docs/adr/0011-model-race-weekends-as-rounds-with-sessions-and-open-volunteer-signup.md",
+      "tier": "async",
+      "tierLabel": "asynchronous human review",
+      "queuedAt": null,
+      "slaDays": null,
+      "reviewBy": "2027-02-28",
+      "slaState": "within-sla",
+      "deadlineDate": "2027-02-28",
+      "routingTargets": [],
+      "quorum": null,
+      "approvalCount": 0,
+      "unresolvedObjectionCount": 0,
+      "resolvedObjectionCount": 0,
+      "escalatedAt": null,
+      "decidedAt": null,
+      "itemFindings": []
+    },
+    {
+      "id": "0010",
+      "title": "Access object storage through a provider seam",
+      "sourcePath": "docs/adr/0010-access-object-storage-through-a-provider-seam.md",
+      "tier": "async",
+      "tierLabel": "asynchronous human review",
+      "queuedAt": null,
+      "slaDays": null,
+      "reviewBy": "2027-08-29",
+      "slaState": "within-sla",
+      "deadlineDate": "2027-08-29",
+      "routingTargets": [],
+      "quorum": null,
+      "approvalCount": 0,
+      "unresolvedObjectionCount": 0,
+      "resolvedObjectionCount": 0,
+      "escalatedAt": null,
+      "decidedAt": null,
+      "itemFindings": []
+    }
+  ],
+  "corpusFindings": []
+}
