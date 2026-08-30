@@ -1,0 +1,1599 @@
+"use client";
+
+/**
+ * PracticeSessionEditor Component
+ *
+ * Main editor for creating and organizing practice sessions.
+ * Allows coaches to add plays, set durations, and share sessions with team members.
+ *
+ * Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 4.3, 4.4
+ */
+
+import React, { useState, useCallback, useEffect, useRef } from "react";
+import {
+    Box,
+    TextField,
+    Typography,
+    Button,
+    CircularProgress,
+    Alert,
+    AlertTitle,
+    MenuItem,
+    Stack,
+    Card,
+    CardContent,
+    CardHeader,
+    CardMedia,
+    CardActions,
+    IconButton,
+    Chip,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    DialogActions,
+} from "@mui/material";
+import { useTheme } from "@mui/material/styles";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import {
+    Save as SaveIcon,
+    Share as ShareIcon,
+    Delete as DeleteIcon,
+    Edit as EditIcon,
+    SportsHockey as HockeyIcon,
+} from "@mui/icons-material";
+import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
+import Image from "next/image";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { EmptyState } from "@/components/ui/EmptyState";
+import {
+    PracticeSessionData,
+    PlayInSession,
+    SavedPlay,
+    validateSessionDuration,
+    VALIDATION_CONSTRAINTS,
+} from "@/types/practice-planner";
+import type { BookingConflict } from "@/types/segments";
+import {
+    formatDateTimeInZone,
+    formatDateTimeLocalInput,
+    parseDateTimeLocalToUtc,
+    resolveTimeZone,
+} from "@/lib/utils/date";
+import { PlayLibrary } from "./PlayLibrary";
+import {
+    Add as AddIcon,
+    ArrowUpward as ArrowUpwardIcon,
+    ArrowDownward as ArrowDownwardIcon,
+} from "@mui/icons-material";
+
+/**
+ * A venue the coach can book ice at (feature 006, FR-019).
+ * Loaded server-side by the new/edit pages via getVenueBookingOptions.
+ */
+export interface VenueBookingOption {
+    id: string;
+    name: string;
+    timezone: string;
+}
+
+export interface VenueReservationBookingOption {
+    id: string;
+    startsAt: string;
+    endsAt: string;
+    timezone: string;
+    venueId: string;
+    venueName: string;
+    surfaceId: string | null;
+    surfaceName: string | null;
+    segmentId: string | null;
+    segmentName: string | null;
+    ownerType: "league" | "team";
+}
+
+/**
+ * Optional venue attachment fields carried alongside the session data
+ * on save (feature 006, FR-019). All null when the practice is unbooked.
+ */
+export interface PracticeVenueAttachment {
+    reservationId: string | null;
+    venueId: string | null;
+    surfaceId: string | null;
+    segmentId: string | null;
+    startAt: Date | null;
+}
+
+/** Full payload handed to onSave: session data + booking + override flag. */
+export interface PracticeSessionSubmitData
+    extends PracticeSessionData,
+        PracticeVenueAttachment {
+    overrideConflicts: boolean;
+    overrideReason: string;
+}
+
+/**
+ * Structured save outcome so the editor can distinguish venue booking
+ * conflicts (warn + "Book anyway", FR-019/US5) from ordinary errors.
+ */
+export type PracticeSessionSaveResult =
+    | { success: true }
+    | { success: false; error: string; conflicts?: BookingConflict[] };
+
+/**
+ * Pull booking conflicts out of an ActionResult's `details` payload
+ * (same shape season games return — details.conflicts).
+ */
+export function extractBookingConflicts(details: unknown): BookingConflict[] | undefined {
+    if (details && typeof details === "object" && "conflicts" in details) {
+        const conflicts = (details as { conflicts: unknown }).conflicts;
+        if (Array.isArray(conflicts) && conflicts.length > 0) {
+            return conflicts.map((conflict): BookingConflict => {
+                const item = conflict as Partial<BookingConflict> & {
+                    startsAt?: Date | string;
+                    endsAt?: Date | string | null;
+                };
+                return {
+                    source: item.source ?? "venueReservation",
+                    title: item.title ?? "Existing venue reservation",
+                    startAt: new Date(item.startsAt ?? 0),
+                    endAt: item.endsAt ? new Date(item.endsAt) : null,
+                    surfaceId: item.surfaceId ?? null,
+                    segmentId: item.segmentId ?? null,
+                    segmentName: item.segmentName ?? null,
+                };
+            });
+        }
+    }
+    return undefined;
+}
+
+/**
+ * Props for the PracticeSessionEditor component
+ */
+export interface PracticeSessionEditorProps {
+    sessionId?: string;
+    teamId: string;
+    initialData?: Partial<PracticeSessionData> & Partial<PracticeVenueAttachment>;
+    /** Venues available for the optional ice booking (feature 006). */
+    venues?: VenueBookingOption[];
+    /** Confirmed, unassigned inventory eligible for this exact team. */
+    reservations?: VenueReservationBookingOption[];
+    /** Active surfaces per venue id. */
+    surfacesByVenue?: Record<string, Array<{ id: string; name: string }>>;
+    /** Active segments per surface id. */
+    segmentsBySurface?: Record<string, Array<{ id: string; name: string }>>;
+    /** Display name of the implicit whole-surface option per surface ("Full ice"). */
+    wholeLabelBySurface?: Record<string, string>;
+    onSave?: (session: PracticeSessionSubmitData) => Promise<PracticeSessionSaveResult>;
+    onShare?: (sessionId: string) => Promise<void>;
+    onCancel?: () => void;
+}
+
+/**
+ * Props for the PlayCard component
+ */
+interface PlayCardProps {
+    play: PlayInSession;
+    index: number;
+    totalPlays: number;
+    isEditing: boolean;
+    onDelete: (playId: string) => void;
+    onEdit: (playId: string) => void;
+    onUpdate: (playId: string, updates: Partial<PlayInSession>) => void;
+    onCancelEdit: () => void;
+    onMoveUp: (index: number) => void;
+    onMoveDown: (index: number) => void;
+}
+
+/**
+ * PlayCard Component
+ *
+ * Individual play card showing thumbnail, duration, and instructions
+ * Requirements: 2.2, 2.4, 2.5
+ */
+function PlayCard({
+    play,
+    index,
+    totalPlays,
+    isEditing,
+    onDelete,
+    onEdit,
+    onUpdate,
+    onCancelEdit,
+    onMoveUp,
+    onMoveDown,
+}: PlayCardProps) {
+    // Local state for editing
+    const [editDuration, setEditDuration] = useState(play.duration);
+    const [editInstructions, setEditInstructions] = useState(play.instructions);
+
+    // Get thumbnail from play instance (copied from library play when added)
+    const thumbnail = play.thumbnail || "";
+
+    /**
+     * Handle save edits
+     * Requirements: 2.4 - Save inline edits
+     */
+    const handleSaveEdits = () => {
+        onUpdate(play.id, {
+            duration: editDuration,
+            instructions: editInstructions,
+        });
+    };
+
+    /**
+     * Handle cancel edits
+     */
+    const handleCancelEdits = () => {
+        setEditDuration(play.duration);
+        setEditInstructions(play.instructions);
+        onCancelEdit();
+    };
+
+    return (
+        <Card
+            sx={{
+                display: "flex",
+                flexDirection: { xs: "column", sm: "row" },
+                gap: 2,
+            }}
+        >
+            {/* Thumbnail */}
+            <CardMedia
+                component="div"
+                sx={{
+                    width: { xs: "100%", sm: 200 },
+                    height: { xs: 150, sm: 120 },
+                    bgcolor: "action.hover",
+                    borderRight: { sm: "1px solid var(--sp-border)" },
+                    borderBottom: { xs: "1px solid var(--sp-border)", sm: "none" },
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    position: "relative",
+                    flexShrink: 0,
+                }}
+            >
+                {thumbnail ? (
+                    <Image
+                        src={thumbnail}
+                        alt={`Play ${index + 1}`}
+                        fill
+                        style={{ objectFit: "contain" }}
+                        unoptimized
+                    />
+                ) : (
+                    <Typography variant="body2" color="text.secondary">
+                        Play {index + 1}
+                    </Typography>
+                )}
+                <Chip
+                    label={`#${index + 1}`}
+                    size="small"
+                    sx={{
+                        position: "absolute",
+                        top: 8,
+                        left: 8,
+                        bgcolor: "background.paper",
+                        border: "1px solid var(--sp-border)",
+                    }}
+                />
+            </CardMedia>
+
+            {/* Content */}
+            <CardContent sx={{ flexGrow: 1 }}>
+                <Stack spacing={1}>
+                    <Typography variant="subtitle1" component="h3">
+                        Play {index + 1}
+                    </Typography>
+
+                    {/* Duration - Editable */}
+                    {/* Requirements: 2.4 - Duration input for each play */}
+                    {isEditing ? (
+                        <TextField
+                            label="Duration (minutes)"
+                            type="number"
+                            value={editDuration}
+                            onChange={(e) => setEditDuration(parseInt(e.target.value, 10) || 0)}
+                            size="small"
+                            inputProps={{
+                                min: VALIDATION_CONSTRAINTS.MIN_DURATION,
+                                max: VALIDATION_CONSTRAINTS.MAX_DURATION,
+                            }}
+                            fullWidth
+                        />
+                    ) : (
+                        <Stack direction="row" spacing={1} alignItems="center">
+                            <Typography variant="body2" color="text.secondary">
+                                Duration:
+                            </Typography>
+                            <Typography variant="body2" fontWeight="medium">
+                                {play.duration} minutes
+                            </Typography>
+                        </Stack>
+                    )}
+
+                    {/* Instructions - Editable */}
+                    {/* Requirements: 2.4 - Inline editor for play instructions */}
+                    {isEditing ? (
+                        <TextField
+                            label="Instructions"
+                            value={editInstructions}
+                            onChange={(e) => setEditInstructions(e.target.value)}
+                            multiline
+                            rows={3}
+                            size="small"
+                            fullWidth
+                            inputProps={{ maxLength: 500 }}
+                            helperText={`${editInstructions.length}/500 characters`}
+                        />
+                    ) : (
+                        play.instructions && (
+                            <Box>
+                                <Typography variant="body2" color="text.secondary" gutterBottom>
+                                    Instructions:
+                                </Typography>
+                                <Typography
+                                    variant="body2"
+                                    sx={{
+                                        display: "-webkit-box",
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: "vertical",
+                                        overflow: "hidden",
+                                    }}
+                                >
+                                    {play.instructions}
+                                </Typography>
+                            </Box>
+                        )
+                    )}
+
+                    {/* Edit Actions */}
+                    {isEditing && (
+                        <Stack direction="row" spacing={1} justifyContent="flex-end">
+                            <Button size="small" variant="text" onClick={handleCancelEdits}>
+                                Cancel
+                            </Button>
+                            <Button
+                                size="small"
+                                variant="contained"
+                                onClick={handleSaveEdits}
+                            >
+                                Save
+                            </Button>
+                        </Stack>
+                    )}
+                </Stack>
+            </CardContent>
+
+            {/* Actions */}
+            {!isEditing && (
+                <CardActions
+                    sx={{
+                        flexDirection: { xs: "row", sm: "column" },
+                        justifyContent: "center",
+                        p: 1,
+                        gap: 0.5,
+                        borderTop: { xs: "1px solid var(--sp-border)", sm: "none" },
+                        borderLeft: { sm: "1px solid var(--sp-border)" },
+                    }}
+                >
+                    {/* Requirements: 2.5 - Reordering controls */}
+                    <IconButton
+                        size="small"
+                        onClick={() => onMoveUp(index)}
+                        disabled={index === 0}
+                        aria-label={`Move play ${index + 1} up`}
+                    >
+                        <ArrowUpwardIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                        size="small"
+                        onClick={() => onMoveDown(index)}
+                        disabled={index === totalPlays - 1}
+                        aria-label={`Move play ${index + 1} down`}
+                    >
+                        <ArrowDownwardIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                        size="small"
+                        onClick={() => onEdit(play.id)}
+                        aria-label={`Edit play ${index + 1}`}
+                    >
+                        <EditIcon fontSize="small" />
+                    </IconButton>
+                    <IconButton
+                        size="small"
+                        color="error"
+                        onClick={() => onDelete(play.id)}
+                        aria-label={`Delete play ${index + 1}`}
+                    >
+                        <DeleteIcon fontSize="small" />
+                    </IconButton>
+                </CardActions>
+            )}
+        </Card>
+    );
+}
+
+/**
+ * PracticeSessionEditor Component
+ *
+ * Requirements: 2.1 - Create form fields for title, date, and duration
+ */
+export function PracticeSessionEditor({
+    sessionId,
+    teamId,
+    initialData,
+    venues = [],
+    reservations = [],
+    surfacesByVenue = {},
+    segmentsBySurface = {},
+    wholeLabelBySurface = {},
+    onSave,
+    onShare,
+    onCancel,
+}: PracticeSessionEditorProps) {
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+
+    // Session metadata state
+    // Requirements: 2.1
+    const [title, setTitle] = useState(initialData?.title || "");
+    const [date, setDate] = useState<Date | null>(initialData?.date || new Date());
+    const [duration, setDuration] = useState(initialData?.duration || 60);
+    const [plays, setPlays] = useState<PlayInSession[]>(initialData?.plays || []);
+    const [isShared, setIsShared] = useState(initialData?.isShared || false);
+    const [reservationId, setReservationId] = useState(
+        initialData?.reservationId ?? "",
+    );
+    const [overrideReason, setOverrideReason] = useState("");
+
+    // Ice booking state (feature 006, FR-019): optional venue attachment.
+    // startTime is a wall-clock HH:MM interpreted in the venue's timezone.
+    const [venueId, setVenueId] = useState(initialData?.venueId ?? "");
+    const [surfaceId, setSurfaceId] = useState(initialData?.surfaceId ?? "");
+    const [segmentId, setSegmentId] = useState(initialData?.segmentId ?? "");
+    const [startTime, setStartTime] = useState(() => {
+        if (!initialData?.startAt) return "";
+        const initialZone = resolveTimeZone(
+            venues.find((venue) => venue.id === initialData.venueId)?.timezone
+        );
+        // formatDateTimeLocalInput returns YYYY-MM-DDTHH:MM — keep the time part.
+        return formatDateTimeLocalInput(initialData.startAt, initialZone).slice(11, 16);
+    });
+    const [bookingConflicts, setBookingConflicts] = useState<BookingConflict[] | null>(null);
+
+    // UI state
+    const [isSaving, setIsSaving] = useState(false);
+    const [isSharing, setIsSharing] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    const [saveSuccess, setSaveSuccess] = useState(false);
+    const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+    const [showLibrary, setShowLibrary] = useState(false);
+    const [editingPlayId, setEditingPlayId] = useState<string | null>(null);
+    const [showShareDialog, setShowShareDialog] = useState(false);
+
+    // Auto-save state
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const successTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const handleSaveRef = useRef<((overrideConflicts?: boolean) => Promise<void>) | undefined>(undefined);
+
+    // Timezone the booking start time is entered in (the venue's zone,
+    // matching GameForm's wall-clock handling).
+    const selectedReservation = reservations.find(
+        (reservation) => reservation.id === reservationId,
+    );
+    const selectedVenueTimeZone = resolveTimeZone(
+        selectedReservation?.timezone
+        ?? venues.find((venue) => venue.id === venueId)?.timezone
+    );
+
+    /**
+     * Validate form fields
+     * Requirements: 2.1 - Form validation for required fields
+     */
+    const validateForm = useCallback((requiresOverrideReason = false): boolean => {
+        const errors: Record<string, string> = {};
+
+        // Validate title
+        if (!title.trim()) {
+            errors.title = "Title is required";
+        } else if (title.trim().length > 100) {
+            errors.title = "Title must be 100 characters or less";
+        }
+
+        // Validate date
+        if (!date) {
+            errors.date = "Date is required";
+        } else if (isNaN(date.getTime())) {
+            errors.date = "Invalid date";
+        }
+
+        // Validate duration
+        // Requirements: 2.1 - Duration validation (1-300 minutes)
+        const durationValidation = validateSessionDuration(duration);
+        if (!durationValidation.valid) {
+            errors.duration = durationValidation.errors[0]?.message || "Invalid duration";
+        }
+
+        // Booking a venue requires a start time (FR-019): the slot is the
+        // practice date + start time, running for the session duration.
+        if (venueId && !startTime) {
+            errors.startTime = "Start time is required when booking a venue";
+        }
+        if (requiresOverrideReason && !overrideReason.trim()) {
+            errors.overrideReason = "Explain why this conflict should be overridden";
+        }
+
+        setValidationErrors(errors);
+        return Object.keys(errors).length === 0;
+    }, [title, date, duration, venueId, startTime, overrideReason]);
+
+    /**
+     * Handle title change
+     */
+    const handleTitleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        setTitle(event.target.value);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+        // Clear title error when user starts typing
+        if (validationErrors.title) {
+            setValidationErrors((prev) =>
+                Object.fromEntries(Object.entries(prev).filter(([key]) => key !== "title"))
+            );
+        }
+    };
+
+    /**
+     * Handle date change
+     */
+    const handleDateChange = (newDate: Date | null) => {
+        setDate(newDate);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+        // The booking slot follows the practice date — stale conflicts no longer apply.
+        setBookingConflicts(null);
+        // Clear date error when user changes date
+        if (validationErrors.date) {
+            setValidationErrors((prev) =>
+                Object.fromEntries(Object.entries(prev).filter(([key]) => key !== "date"))
+            );
+        }
+    };
+
+    /**
+     * Handle duration change
+     */
+    const handleDurationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const value = parseInt(event.target.value, 10);
+        if (!isNaN(value)) {
+            setDuration(value);
+            setHasUnsavedChanges(true);
+            setSaveSuccess(false);
+            // The booking slot length follows the duration — stale conflicts no longer apply.
+            setBookingConflicts(null);
+            // Clear duration error when user changes duration
+            if (validationErrors.duration) {
+                setValidationErrors((prev) =>
+                    Object.fromEntries(Object.entries(prev).filter(([key]) => key !== "duration"))
+                );
+            }
+        }
+    };
+
+    /**
+     * Ice booking handlers (feature 006, FR-019).
+     * Changing the venue resets surface/segment (they belong to a venue —
+     * stale selections would be rejected server-side, matching GameForm).
+     */
+    const handleVenueChange = (nextVenueId: string) => {
+        setReservationId("");
+        setVenueId(nextVenueId);
+        setSurfaceId("");
+        setSegmentId("");
+        setBookingConflicts(null);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+    };
+
+    const handleReservationChange = (nextReservationId: string) => {
+        setReservationId(nextReservationId);
+        setBookingConflicts(null);
+        setOverrideReason("");
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+        const reservation = reservations.find(
+            (option) => option.id === nextReservationId,
+        );
+        if (!reservation) {
+            setVenueId("");
+            setSurfaceId("");
+            setSegmentId("");
+            setStartTime("");
+            return;
+        }
+
+        const startsAt = new Date(reservation.startsAt);
+        const endsAt = new Date(reservation.endsAt);
+        setDate(startsAt);
+        setDuration(Math.round((endsAt.getTime() - startsAt.getTime()) / 60_000));
+        setVenueId(reservation.venueId);
+        setSurfaceId(reservation.surfaceId ?? "");
+        setSegmentId(reservation.segmentId ?? "");
+        setStartTime(
+            formatDateTimeLocalInput(startsAt, reservation.timezone).slice(11, 16),
+        );
+    };
+
+    const handleSurfaceChange = (nextSurfaceId: string) => {
+        setSurfaceId(nextSurfaceId);
+        // Segments belong to a surface — reset on surface change.
+        setSegmentId("");
+        setBookingConflicts(null);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+    };
+
+    const handleSegmentChange = (nextSegmentId: string) => {
+        setSegmentId(nextSegmentId);
+        setBookingConflicts(null);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+    };
+
+    const handleStartTimeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        setStartTime(event.target.value);
+        setBookingConflicts(null);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+        if (validationErrors.startTime) {
+            setValidationErrors((prev) =>
+                Object.fromEntries(Object.entries(prev).filter(([key]) => key !== "startTime"))
+            );
+        }
+    };
+
+    /**
+     * Detach the practice from the venue entirely: on save the practice
+     * loses its availability footprint and behaves exactly as before.
+     */
+    const handleClearBooking = () => {
+        setReservationId("");
+        setVenueId("");
+        setSurfaceId("");
+        setSegmentId("");
+        setStartTime("");
+        setBookingConflicts(null);
+        setOverrideReason("");
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+        if (validationErrors.startTime) {
+            setValidationErrors((prev) =>
+                Object.fromEntries(Object.entries(prev).filter(([key]) => key !== "startTime"))
+            );
+        }
+    };
+
+    /**
+     * Handle save action
+     * Requirements: 2.1 - Save session metadata
+     * FR-019: pass `overrideConflicts: true` (via "Book anyway") to save
+     * despite venue booking conflicts.
+     */
+    const handleSave = useCallback(async (overrideConflicts: boolean = false) => {
+        // Validate form (includes date validation)
+        if (!validateForm(overrideConflicts)) {
+            setSaveError("Please fix the validation errors");
+            return;
+        }
+
+        // TypeScript narrowing: after validateForm() passes, date is guaranteed to be non-null
+        if (!date) return;
+
+        // Combine the practice date with the entered wall-clock start time in
+        // the venue's timezone to form the booking instant (FR-019).
+        let startAt: Date | null = null;
+        if (selectedReservation) {
+            startAt = new Date(selectedReservation.startsAt);
+        } else if (venueId) {
+            // Derive the booking day in the venue's zone — not via browser-local
+            // getFullYear/getMonth/getDate — so the day doesn't shift across
+            // midnight between zones (matches the initial startTime derivation).
+            const dateStr = formatDateTimeLocalInput(date, selectedVenueTimeZone).slice(0, 10);
+            startAt = parseDateTimeLocalToUtc(`${dateStr}T${startTime}`, selectedVenueTimeZone);
+            if (!startAt) {
+                setValidationErrors((prev) => ({
+                    ...prev,
+                    startTime: "Enter a valid start time",
+                }));
+                setSaveError("Please fix the validation errors");
+                return;
+            }
+        }
+
+        setIsSaving(true);
+        setSaveError(null);
+        setSaveSuccess(false);
+        setBookingConflicts(null);
+
+        try {
+            // Create session data object (plus optional venue booking)
+            const sessionData: PracticeSessionSubmitData = {
+                id: sessionId,
+                title: title.trim(),
+                date,
+                duration,
+                plays,
+                isShared,
+                reservationId: reservationId || null,
+                venueId: venueId || null,
+                surfaceId: venueId ? surfaceId || null : null,
+                segmentId: venueId && surfaceId ? segmentId || null : null,
+                startAt,
+                overrideConflicts,
+                overrideReason: overrideConflicts ? overrideReason.trim() : "",
+            };
+
+            // Call onSave callback if provided
+            const result: PracticeSessionSaveResult = onSave
+                ? await onSave(sessionData)
+                : { success: true };
+
+            if (!result.success) {
+                if (result.conflicts && result.conflicts.length > 0) {
+                    // FR-019/US5: warn and let the coach explicitly book anyway.
+                    setBookingConflicts(result.conflicts);
+                } else {
+                    setSaveError(result.error);
+                }
+                return;
+            }
+
+            setHasUnsavedChanges(false);
+            setSaveSuccess(true);
+
+            // Clear success message after 3 seconds
+            if (successTimeoutRef.current) {
+                clearTimeout(successTimeoutRef.current);
+            }
+            successTimeoutRef.current = setTimeout(() => {
+                setSaveSuccess(false);
+            }, 3000);
+        } catch (error) {
+            console.error("Error saving session:", error);
+            setSaveError(
+                error instanceof Error ? error.message : "Failed to save session"
+            );
+        } finally {
+            setIsSaving(false);
+        }
+    }, [
+        title,
+        date,
+        duration,
+        plays,
+        isShared,
+        sessionId,
+        reservationId,
+        venueId,
+        surfaceId,
+        segmentId,
+        startTime,
+        selectedVenueTimeZone,
+        selectedReservation,
+        overrideReason,
+        onSave,
+        validateForm,
+    ]);
+
+    // Keep handleSaveRef updated with latest handleSave function
+    useEffect(() => {
+        handleSaveRef.current = handleSave;
+    }, [handleSave]);
+
+    /**
+     * Auto-save with debouncing
+     * Requirements: 2.1 - Auto-save for session metadata
+     */
+    useEffect(() => {
+        // Clear existing timer
+        if (autoSaveTimerRef.current) {
+            clearTimeout(autoSaveTimerRef.current);
+        }
+
+        // Only auto-save if there are unsaved changes and we have a sessionId (editing existing session)
+        if (hasUnsavedChanges && sessionId) {
+            autoSaveTimerRef.current = setTimeout(() => {
+                handleSaveRef.current?.();
+            }, 2000); // 2 second debounce
+        }
+
+        return () => {
+            if (autoSaveTimerRef.current) {
+                clearTimeout(autoSaveTimerRef.current);
+            }
+        };
+    }, [hasUnsavedChanges, sessionId]);
+
+    /**
+     * Handle open share dialog
+     * Requirements: 3.1 - Share button with confirmation
+     */
+    const handleOpenShareDialog = useCallback(() => {
+        if (!sessionId) {
+            setSaveError("Please save the session before sharing");
+            return;
+        }
+        if (hasUnsavedChanges) {
+            setSaveError("Please save your changes before sharing");
+            return;
+        }
+        setShowShareDialog(true);
+    }, [sessionId, hasUnsavedChanges]);
+
+    /**
+     * Handle close share dialog
+     */
+    const handleCloseShareDialog = useCallback(() => {
+        setShowShareDialog(false);
+    }, []);
+
+    /**
+     * Handle share action
+     * Requirements: 3.1 - Share session with team members
+     */
+    const handleShare = useCallback(async () => {
+        if (!sessionId) {
+            setSaveError("Please save the session before sharing");
+            return;
+        }
+
+        setIsSharing(true);
+        setSaveError(null);
+        setShowShareDialog(false);
+
+        try {
+            if (onShare) {
+                await onShare(sessionId);
+            }
+            setIsShared(true);
+            setSaveSuccess(true);
+
+            // Clear success message after 3 seconds
+            if (successTimeoutRef.current) {
+                clearTimeout(successTimeoutRef.current);
+            }
+            successTimeoutRef.current = setTimeout(() => {
+                setSaveSuccess(false);
+            }, 3000);
+        } catch (error) {
+            console.error("Error sharing session:", error);
+            setSaveError(
+                error instanceof Error ? error.message : "Failed to share session"
+            );
+        } finally {
+            setIsSharing(false);
+        }
+    }, [sessionId, onShare]);
+
+    /**
+     * Calculate total play time
+     * Requirements: 2.3 - Display total session time
+     */
+    const calculateTotalPlayTime = useCallback((): number => {
+        return plays.reduce((sum, play) => sum + play.duration, 0);
+    }, [plays]);
+
+    /**
+     * Handle delete play
+     * Requirements: 2.2 - Remove plays from session
+     */
+    const handleDeletePlay = useCallback((playId: string) => {
+        setPlays((prevPlays) =>
+            prevPlays
+                .filter((p) => p.id !== playId)
+                .map((play, idx) => ({ ...play, sequence: idx }))
+        );
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+    }, []);
+
+    /**
+     * Handle edit play
+     * Requirements: 2.4 - Edit play in session
+     */
+    const handleEditPlay = useCallback((playId: string) => {
+        setEditingPlayId(playId);
+    }, []);
+
+    /**
+     * Handle update play in session
+     * Requirements: 2.4, 4.4 - Ensure edits don't affect library play
+     */
+    const handleUpdatePlayInSession = useCallback(
+        (playId: string, updates: Partial<PlayInSession>) => {
+            setPlays((prevPlays) =>
+                prevPlays.map((play) =>
+                    play.id === playId ? { ...play, ...updates } : play
+                )
+            );
+            setHasUnsavedChanges(true);
+            setSaveSuccess(false);
+            setEditingPlayId(null);
+        },
+        []
+    );
+
+    /**
+     * Handle cancel edit
+     */
+    const handleCancelEdit = useCallback(() => {
+        setEditingPlayId(null);
+    }, []);
+
+    /**
+     * Handle add play from library
+     * Requirements: 4.3, 4.4 - Add play from library, create copy
+     */
+    const handleAddPlayFromLibrary = useCallback((savedPlay: SavedPlay) => {
+        // Requirements: 4.4 - Create copy of library play when adding to session
+        // Generate unique ID for this play instance
+        // Use JSON.parse(JSON.stringify()) for deep copy to prevent mutations affecting library play
+        const playInstance: PlayInSession = {
+            id: `play-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            playId: savedPlay.id,
+            sequence: plays.length, // Requirements: 2.2 - Assign sequence number automatically (0-based)
+            duration: 10, // Default duration
+            instructions: savedPlay.description || "",
+            playData: JSON.parse(JSON.stringify(savedPlay.playData)), // Deep copy to prevent library play mutation
+            thumbnail: savedPlay.thumbnail || "", // Copy thumbnail from library play
+        };
+
+        setPlays((prevPlays) => [...prevPlays, playInstance]);
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+        setShowLibrary(false); // Close library after adding
+    }, [plays.length]);
+
+    /**
+     * Handle open library
+     * Requirements: 4.3 - Implement add play button to open library
+     */
+    const handleOpenLibrary = useCallback(() => {
+        setShowLibrary(true);
+    }, []);
+
+    /**
+     * Handle close library
+     */
+    const handleCloseLibrary = useCallback(() => {
+        setShowLibrary(false);
+    }, []);
+
+    /**
+     * Handle move play up
+     * Requirements: 2.5 - Reorder plays, update sequence numbers
+     */
+    const handleMovePlayUp = useCallback((index: number) => {
+        if (index === 0) return;
+
+        setPlays((prevPlays) => {
+            const newPlays = [...prevPlays];
+            // Swap with previous play
+            [newPlays[index - 1], newPlays[index]] = [newPlays[index], newPlays[index - 1]];
+            // Update sequence numbers (0-based to match server validation)
+            return newPlays.map((play, idx) => ({
+                ...play,
+                sequence: idx,
+            }));
+        });
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+    }, []);
+
+    /**
+     * Handle move play down
+     * Requirements: 2.5 - Reorder plays, update sequence numbers
+     */
+    const handleMovePlayDown = useCallback((index: number) => {
+        setPlays((prevPlays) => {
+            if (index === prevPlays.length - 1) return prevPlays;
+
+            const newPlays = [...prevPlays];
+            // Swap with next play
+            [newPlays[index], newPlays[index + 1]] = [newPlays[index + 1], newPlays[index]];
+            // Update sequence numbers (0-based to match server validation)
+            return newPlays.map((play, idx) => ({
+                ...play,
+                sequence: idx,
+            }));
+        });
+        setHasUnsavedChanges(true);
+        setSaveSuccess(false);
+    }, []);
+
+    // Cleanup success timeout on unmount
+    useEffect(() => {
+        return () => {
+            if (successTimeoutRef.current) {
+                clearTimeout(successTimeoutRef.current);
+            }
+        };
+    }, []);
+
+    // Ice booking option lists for the currently selected venue/surface (006).
+    const venueSurfaces = venueId ? (surfacesByVenue[venueId] ?? []) : [];
+    const surfaceSegments = surfaceId ? (segmentsBySurface[surfaceId] ?? []) : [];
+    const wholeSurfaceLabel = (surfaceId && wholeLabelBySurface[surfaceId]) || "Whole surface";
+
+    /**
+     * Save status, shown in the header bar next to the Save button.
+     */
+    const saveStatus = isSaving ? (
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1 }}>
+            <CircularProgress size={14} color="inherit" />
+            <Typography variant="body2" color="text.secondary">
+                Saving...
+            </Typography>
+        </Stack>
+    ) : hasUnsavedChanges ? (
+        <Chip label="Unsaved changes" size="small" color="warning" variant="outlined" sx={{ alignSelf: "center" }} />
+    ) : saveSuccess ? (
+        <Typography variant="body2" color="text.secondary" sx={{ alignSelf: "center", px: 1 }}>
+            Saved
+        </Typography>
+    ) : null;
+
+    return (
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {/* Header: one toolbar-style bar with the save state and actions */}
+            <PageHeader
+                icon={<HockeyIcon />}
+                title={sessionId ? "Edit practice session" : "New practice session"}
+                subtitle={
+                    sessionId
+                        ? `${plays.length} play${plays.length === 1 ? "" : "s"} · ${duration} min${isShared ? " · Shared with team" : ""}`
+                        : "Set the time, book ice if you need it, and add plays from the library"
+                }
+                actions={
+                    <>
+                        {saveStatus}
+                        {onCancel && (
+                            <Button
+                                variant="text"
+                                onClick={onCancel}
+                                disabled={isSaving || isSharing}
+                            >
+                                Cancel
+                            </Button>
+                        )}
+                        {/* Share Button */}
+                        {/* Requirements: 3.1 - Share button with confirmation */}
+                        {sessionId && (
+                            <Button
+                                variant="outlined"
+                                onClick={handleOpenShareDialog}
+                                disabled={isSaving || isSharing || hasUnsavedChanges}
+                                startIcon={
+                                    isSharing ? (
+                                        <CircularProgress size={18} color="inherit" />
+                                    ) : (
+                                        <ShareIcon />
+                                    )
+                                }
+                            >
+                                {isSharing ? "Sharing..." : isShared ? "Shared" : "Share with team"}
+                            </Button>
+                        )}
+                        <Button
+                            variant="contained"
+                            onClick={() => handleSave()}
+                            disabled={isSaving || isSharing || !title.trim()}
+                            startIcon={
+                                isSaving ? (
+                                    <CircularProgress size={18} color="inherit" />
+                                ) : (
+                                    <SaveIcon />
+                                )
+                            }
+                        >
+                            {isSaving ? "Saving..." : "Save session"}
+                        </Button>
+                    </>
+                }
+            />
+
+            {/* Error Message */}
+            {saveError && (
+                <Alert severity="error" onClose={() => setSaveError(null)}>
+                    {saveError}
+                </Alert>
+            )}
+
+            {/* Venue booking conflicts (FR-019/US5): warn and allow an
+                explicit override that resubmits with overrideConflicts. */}
+            {bookingConflicts && (
+                <Alert
+                    severity="warning"
+                    action={
+                        <Button
+                            color="inherit"
+                            disabled={
+                                isSaving
+                                || isSharing
+                                || !overrideReason.trim()
+                            }
+                            onClick={() => handleSave(true)}
+                        >
+                            Override conflict
+                        </Button>
+                    }
+                >
+                    <AlertTitle>
+                        This time overlaps {bookingConflicts.length} existing booking
+                        {bookingConflicts.length === 1 ? "" : "s"} at the venue
+                    </AlertTitle>
+                    {bookingConflicts.map((conflict, index) => (
+                        <Typography key={`${conflict.title}-${index}`} variant="body2">
+                            {conflict.title} —{" "}
+                            {formatDateTimeInZone(conflict.startAt, selectedVenueTimeZone)}
+                            {conflict.endAt
+                                ? ` – ${formatDateTimeInZone(conflict.endAt, selectedVenueTimeZone)}`
+                                : ""}
+                        </Typography>
+                    ))}
+                    <TextField
+                        label="Override reason"
+                        value={overrideReason}
+                        onChange={(event) => {
+                            setOverrideReason(event.target.value);
+                            if (validationErrors.overrideReason) {
+                                setValidationErrors((previous) => {
+                                    const next = { ...previous };
+                                    delete next.overrideReason;
+                                    return next;
+                                });
+                            }
+                        }}
+                        required
+                        fullWidth
+                        multiline
+                        minRows={2}
+                        error={Boolean(validationErrors.overrideReason)}
+                        helperText={
+                            validationErrors.overrideReason
+                            || "Required for the audit trail"
+                        }
+                        sx={{ mt: 2 }}
+                    />
+                </Alert>
+            )}
+
+            {/* Success Message */}
+            {saveSuccess && (
+                <Alert severity="success" onClose={() => setSaveSuccess(false)}>
+                    {isShared
+                        ? "Session shared successfully!"
+                        : "Session saved successfully!"}
+                </Alert>
+            )}
+
+            {/* Session Metadata Form */}
+            {/* Requirements: 2.1 - Form fields for title, date, and duration */}
+            <Card>
+                <CardHeader title="Session details" subheader="Title, date and duration" />
+                <CardContent>
+                <Stack spacing={2}>
+                    {/* Title Field */}
+                    <TextField
+                        label="Session Title"
+                        value={title}
+                        onChange={handleTitleChange}
+                        fullWidth
+                        required
+                        placeholder="Enter session title"
+                        inputProps={{ maxLength: 100 }}
+                        helperText={
+                            validationErrors.title ||
+                            `${title.length}/100 characters`
+                        }
+                        error={!!validationErrors.title}
+                    />
+
+                    {/* Date Field */}
+                    <DateTimePicker
+                        label="Practice Date & Time"
+                        value={date}
+                        onChange={handleDateChange}
+                        disabled={Boolean(selectedReservation)}
+                        slotProps={{
+                            textField: {
+                                fullWidth: true,
+                                required: true,
+                                sx: { "& .MuiInputBase-root": { minHeight: 44 } },
+                                error: !!validationErrors.date,
+                                helperText: validationErrors.date,
+                            },
+                        }}
+                    />
+
+                    {/* Duration Field */}
+                    {/* Requirements: 2.1 - Duration validation (1-300 minutes) */}
+                    <TextField
+                        label="Session Duration (minutes)"
+                        type="number"
+                        value={duration}
+                        onChange={handleDurationChange}
+                        fullWidth
+                        required
+                        disabled={Boolean(selectedReservation)}
+                        sx={{ "& .MuiInputBase-root": { minHeight: 44 } }}
+                        inputProps={{
+                            min: VALIDATION_CONSTRAINTS.MIN_DURATION,
+                            max: VALIDATION_CONSTRAINTS.MAX_DURATION,
+                        }}
+                        helperText={
+                            validationErrors.duration ||
+                            `Duration must be between ${VALIDATION_CONSTRAINTS.MIN_DURATION} and ${VALIDATION_CONSTRAINTS.MAX_DURATION} minutes`
+                        }
+                        error={!!validationErrors.duration}
+                    />
+
+                    {/* Shared Status Indicator */}
+                    {/* Requirements: 3.1 - Show shared status indicator */}
+                    {isShared && (
+                        <Alert severity="info">
+                            This session is shared with your team members
+                        </Alert>
+                    )}
+                </Stack>
+                </CardContent>
+            </Card>
+
+            {(reservations.length > 0 || venues.length > 0) && (
+                <Card>
+                    <CardHeader
+                        title="Venue reservation"
+                        subheader="Select confirmed inventory. Its venue-local interval, surface, and segment become the practice schedule."
+                        action={
+                            (reservationId || venueId) ? (
+                                <Button
+                                    variant="text"
+                                    size="small"
+                                    onClick={handleClearBooking}
+                                    disabled={isSaving || isSharing}
+                                >
+                                    Clear booking
+                                </Button>
+                            ) : undefined
+                        }
+                    />
+                    <CardContent>
+                    <Stack spacing={2}>
+                        {reservations.length > 0 && (
+                            <TextField
+                                select
+                                label="Confirmed reservation"
+                                fullWidth
+                                value={reservationId}
+                                onChange={(event) =>
+                                    handleReservationChange(event.target.value)
+                                }
+                                helperText="Only confirmed, unassigned inventory owned by this team or its league is shown"
+                                sx={{ "& .MuiInputBase-root": { minHeight: 44 } }}
+                            >
+                                <MenuItem value="" sx={{ minHeight: 44 }}>
+                                    No reservation
+                                </MenuItem>
+                                {reservations.map((reservation) => (
+                                    <MenuItem
+                                        key={reservation.id}
+                                        value={reservation.id}
+                                        sx={{ minHeight: 44 }}
+                                    >
+                                        {reservation.venueName} ·{" "}
+                                        {formatDateTimeInZone(
+                                            reservation.startsAt,
+                                            reservation.timezone,
+                                        )}
+                                        {" – "}
+                                        {formatDateTimeInZone(
+                                            reservation.endsAt,
+                                            reservation.timezone,
+                                        )}
+                                    </MenuItem>
+                                ))}
+                            </TextField>
+                        )}
+                        {selectedReservation && (
+                            <Alert severity="info">
+                                <AlertTitle>
+                                    {selectedReservation.venueName}
+                                    {selectedReservation.surfaceName
+                                        ? ` · ${selectedReservation.surfaceName}`
+                                        : ""}
+                                    {selectedReservation.segmentName
+                                        ? ` · ${selectedReservation.segmentName}`
+                                        : ""}
+                                </AlertTitle>
+                                {formatDateTimeInZone(
+                                    selectedReservation.startsAt,
+                                    selectedReservation.timezone,
+                                )}
+                                {" – "}
+                                {formatDateTimeInZone(
+                                    selectedReservation.endsAt,
+                                    selectedReservation.timezone,
+                                )}
+                                {" "}
+                                ({selectedReservation.timezone})
+                            </Alert>
+                        )}
+                        {(reservations.length === 0
+                            || (!reservationId && Boolean(initialData?.venueId))) && (
+                            <>
+                                {reservations.length > 0 && (
+                                    <Alert severity="warning">
+                                        This is a legacy unreserved practice. Keep its venue
+                                        details for compatibility, or select confirmed inventory.
+                                    </Alert>
+                                )}
+                                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                                    <TextField
+                                        select
+                                        label="Venue"
+                                        fullWidth
+                                        value={venueId}
+                                        onChange={(event) =>
+                                            handleVenueChange(event.target.value)
+                                        }
+                                        sx={{ "& .MuiInputBase-root": { minHeight: 44 } }}
+                                    >
+                                        <MenuItem value="" sx={{ minHeight: 44 }}>
+                                            No venue booking
+                                        </MenuItem>
+                                        {venues.map((venue) => (
+                                            <MenuItem
+                                                key={venue.id}
+                                                value={venue.id}
+                                                sx={{ minHeight: 44 }}
+                                            >
+                                                {venue.name}
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                    {venueId && (
+                                <TextField
+                                    label="Start time"
+                                    type="time"
+                                    required
+                                    fullWidth
+                                    value={startTime}
+                                    onChange={handleStartTimeChange}
+                                    error={!!validationErrors.startTime}
+                                    helperText={
+                                        validationErrors.startTime ||
+                                        `On the practice date, in ${selectedVenueTimeZone} (the venue's timezone); runs ${duration} min`
+                                    }
+                                    slotProps={{ inputLabel: { shrink: true } }}
+                                    sx={{ "& .MuiInputBase-root": { minHeight: 44 } }}
+                                />
+                                    )}
+                                </Stack>
+                        {venueId && venueSurfaces.length > 0 && (
+                            <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                                <TextField
+                                    select
+                                    label="Surface (optional)"
+                                    fullWidth
+                                    value={surfaceId}
+                                    onChange={(event) => handleSurfaceChange(event.target.value)}
+                                    sx={{ "& .MuiInputBase-root": { minHeight: 44 } }}
+                                >
+                                    <MenuItem value="">Any surface</MenuItem>
+                                    {venueSurfaces.map((surface) => (
+                                        <MenuItem key={surface.id} value={surface.id}>
+                                            {surface.name}
+                                        </MenuItem>
+                                    ))}
+                                </TextField>
+                                {surfaceId && surfaceSegments.length > 0 && (
+                                    <TextField
+                                        select
+                                        label="Segment (optional)"
+                                        fullWidth
+                                        value={segmentId}
+                                        onChange={(event) => handleSegmentChange(event.target.value)}
+                                        sx={{ "& .MuiInputBase-root": { minHeight: 44 } }}
+                                    >
+                                        <MenuItem value="">{wholeSurfaceLabel}</MenuItem>
+                                        {surfaceSegments.map((segment) => (
+                                            <MenuItem key={segment.id} value={segment.id}>
+                                                {segment.name}
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                )}
+                            </Stack>
+                        )}
+                            </>
+                        )}
+                    </Stack>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Play List Management */}
+            {/* Requirements: 2.2, 2.3 - List view for plays in session */}
+            <Card>
+                <CardHeader
+                    title="Plays in session"
+                    subheader={`${plays.length} play${plays.length === 1 ? "" : "s"}`}
+                    action={
+                        /* Requirements: 4.3 - Add play button to open library */
+                        <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<AddIcon />}
+                            onClick={handleOpenLibrary}
+                            disabled={isSaving || isSharing}
+                        >
+                            Add play
+                        </Button>
+                    }
+                />
+                <CardContent>
+                <Stack spacing={2}>
+                    {/* Total Session Time */}
+                    {/* Requirements: 2.3 - Display total session time with validation */}
+                    {plays.length > 0 && (
+                        <Box>
+                            <Stack direction="row" spacing={2} alignItems="center">
+                                <Typography variant="body2" color="text.secondary">
+                                    Total Play Time: {calculateTotalPlayTime()} minutes
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                    Session Duration: {duration} minutes
+                                </Typography>
+                            </Stack>
+                            {/* Requirements: 2.3 - Show warning when total exceeds session duration */}
+                            {calculateTotalPlayTime() > duration && (
+                                <Alert severity="warning" sx={{ mt: 1 }}>
+                                    Total play time ({calculateTotalPlayTime()} min) exceeds
+                                    session duration ({duration} min)
+                                </Alert>
+                            )}
+                        </Box>
+                    )}
+
+                    {/* Empty State */}
+                    {plays.length === 0 && (
+                        <EmptyState
+                            icon={<HockeyIcon />}
+                            title="No plays added yet"
+                            description="Add plays from your library to build your practice session"
+                            action={
+                                <Button
+                                    variant="outlined"
+                                    startIcon={<AddIcon />}
+                                    onClick={handleOpenLibrary}
+                                    disabled={isSaving || isSharing}
+                                >
+                                    Add play
+                                </Button>
+                            }
+                        />
+                    )}
+
+                    {/* Play Cards */}
+                    {/* Requirements: 2.2 - Play card showing thumbnail, duration, and instructions */}
+                    {plays.length > 0 && (
+                        <Stack spacing={2}>
+                            {plays.map((play, index) => (
+                                <PlayCard
+                                    key={play.id}
+                                    play={play}
+                                    index={index}
+                                    totalPlays={plays.length}
+                                    isEditing={editingPlayId === play.id}
+                                    onDelete={handleDeletePlay}
+                                    onEdit={handleEditPlay}
+                                    onUpdate={handleUpdatePlayInSession}
+                                    onCancelEdit={handleCancelEdit}
+                                    onMoveUp={handleMovePlayUp}
+                                    onMoveDown={handleMovePlayDown}
+                                />
+                            ))}
+                        </Stack>
+                    )}
+                </Stack>
+                </CardContent>
+            </Card>
+
+            {/* Play Library Dialog */}
+            {/* Requirements: 4.3 - Integrate PlayLibrary component in selection mode */}
+            {/* Using MUI Dialog for accessibility: focus trapping, scroll locking, Escape key handling */}
+            <Dialog
+                open={showLibrary}
+                onClose={handleCloseLibrary}
+                fullScreen={isMobile}
+                maxWidth="lg"
+                fullWidth
+                aria-labelledby="play-library-dialog-title"
+            >
+                <DialogTitle id="play-library-dialog-title">
+                    <Stack
+                        direction="row"
+                        justifyContent="space-between"
+                        alignItems="center"
+                        spacing={2}
+                    >
+                        <span>Select a play from the library</span>
+                        <Button variant="text" size="small" onClick={handleCloseLibrary}>
+                            Close
+                        </Button>
+                    </Stack>
+                </DialogTitle>
+                <DialogContent>
+                    <PlayLibrary
+                        teamId={teamId}
+                        onSelectPlay={handleAddPlayFromLibrary}
+                        mode="select"
+                        showHeader={false}
+                    />
+                </DialogContent>
+            </Dialog>
+
+            {/* Share Confirmation Dialog */}
+            {/* Requirements: 3.1 - Share button with confirmation */}
+            <Dialog
+                open={showShareDialog}
+                onClose={handleCloseShareDialog}
+                aria-labelledby="share-dialog-title"
+                aria-describedby="share-dialog-description"
+            >
+                <DialogTitle id="share-dialog-title">
+                    Share Practice Session?
+                </DialogTitle>
+                <DialogContent>
+                    <DialogContentText id="share-dialog-description">
+                        This will share the practice session with all team members. They
+                        will receive an email notification with a link to view the
+                        session.
+                        {isShared && (
+                            <>
+                                <br />
+                                <br />
+                                <strong>
+                                    Note: This session is already shared. Sharing again will
+                                    send update notifications to team members.
+                                </strong>
+                            </>
+                        )}
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={handleCloseShareDialog} disabled={isSharing} variant="text">
+                        Cancel
+                    </Button>
+                    <Button
+                        onClick={handleShare}
+                        variant="contained"
+                        disabled={isSharing}
+                        startIcon={
+                            isSharing ? (
+                                <CircularProgress size={20} color="inherit" />
+                            ) : (
+                                <ShareIcon />
+                            )
+                        }
+                    >
+                        {isSharing ? "Sharing..." : "Share"}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+        </Box>
+    );
+}

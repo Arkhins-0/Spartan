@@ -1,0 +1,302 @@
+"use client";
+
+import { useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import {
+  Box,
+  Button,
+  TextField,
+  Typography,
+  Container,
+  Alert,
+  Link as MuiLink,
+  Paper,
+} from "@mui/material";
+import Link from "next/link";
+import Logo from "@/components/ui/Logo";
+import { signup } from "@/lib/actions/auth";
+import { signupSchema, pickField } from "@/lib/utils/validation";
+import { AUTH_MESSAGES } from "@/lib/config/constants";
+import { trackAuth } from "@/lib/analytics/umami";
+
+function SignupForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Get invitation parameters from URL (unified invitations target exactly
+  // one of team / league / venue organization)
+  const invitationEmail = searchParams.get("email");
+  const invitationToken = searchParams.get("invitationToken");
+  const teamName = searchParams.get("teamName");
+  const leagueName = searchParams.get("leagueName");
+  const organizationName = searchParams.get("organizationName");
+
+  const invitationSubtitle = teamName
+    ? `Join ${teamName} on Spartan`
+    : leagueName
+      ? `Join the ${leagueName} league on Spartan`
+      : organizationName
+        ? `Join ${organizationName}'s staff on Spartan`
+        : null;
+
+  const [formData, setFormData] = useState({
+    email: invitationEmail || "",
+    password: "",
+    name: "",
+    invitationToken: invitationToken || undefined,
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(false);
+  const [generalError, setGeneralError] = useState("");
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    // Clear error for this field when user starts typing
+    if (errors[name]) {
+      setErrors((prev) => {
+        const newErrors = { ...prev };
+        delete newErrors[name];
+        return newErrors;
+      });
+    }
+  };
+
+  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+
+    // Validate individual field on blur
+    if (name === 'email' || name === 'password' || name === 'name') {
+      const fieldSchema = pickField(signupSchema, name);
+      const validationResult = fieldSchema.safeParse({ [name]: value });
+
+      if (validationResult.success) {
+        // Clear error if validation passes
+        if (errors[name]) {
+          setErrors((prev) => {
+            const newErrors = { ...prev };
+            delete newErrors[name];
+            return newErrors;
+          });
+        }
+      } else {
+        // Set error if validation fails
+        const fieldError = validationResult.error.issues[0]?.message;
+        if (fieldError) {
+          setErrors((prev) => ({ ...prev, [name]: fieldError }));
+        }
+      }
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setErrors({});
+    setGeneralError("");
+
+    // Client-side validation with Zod schema
+    const validationResult = signupSchema.safeParse(formData);
+
+    if (!validationResult.success) {
+      const fieldErrors: Record<string, string> = {};
+      validationResult.error.issues.forEach((issue) => {
+        if (issue.path.length > 0) {
+          fieldErrors[String(issue.path[0])] = issue.message;
+        }
+      });
+      setErrors(fieldErrors);
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      // Call signup Server Action
+      const result = await signup(formData);
+
+      if (result.error) {
+        if (result.details) {
+          // Validation errors
+          const fieldErrors: Record<string, string> = {};
+          result.details.forEach((err) => {
+            if (err.path && err.path.length > 0) {
+              fieldErrors[String(err.path[0])] = err.message;
+            }
+          });
+          setErrors(fieldErrors);
+        } else {
+          setGeneralError(result.error);
+        }
+        return;
+      }
+
+      // Signup successful — invitation matches skip verification, everyone
+      // else gets a "check your email" prompt on the login page.
+      if (result.success) {
+        setGeneralError(""); // Clear any previous errors
+        setErrors({});
+        const emailVerified = result.data?.emailVerified === true;
+        setFormData({ email: "", password: "", name: "", invitationToken: undefined });
+
+        // Track signup event
+        trackAuth('signup', {
+          hasInvitation: !!invitationToken,
+          teamName: teamName || undefined,
+        });
+
+        router.push(
+          `/login?message=${emailVerified ? AUTH_MESSAGES.SIGNUP_READY : AUTH_MESSAGES.SIGNUP_CHECK_EMAIL}`
+        );
+        return;
+      }
+    } catch (error) {
+      console.error("Signup error:", error);
+      setGeneralError("An unexpected error occurred");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Box
+      sx={{
+        flexGrow: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        bgcolor: "background.default",
+        py: { xs: 3, sm: 6 },
+        px: 1.5,
+      }}
+    >
+      <Container maxWidth={false} disableGutters sx={{ maxWidth: 400 }}>
+        <Paper sx={{ p: { xs: 2.5, sm: 3 } }}>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+          >
+            <Box sx={{ mb: 2 }}>
+              <Logo size="large" priority href={null} />
+            </Box>
+            <Typography
+              component="h1"
+              variant="h3"
+              sx={{ fontSize: "1.25rem", fontWeight: 600, mb: 0.5 }}
+            >
+              Create account
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mb: 2.5, textAlign: "center" }}
+            >
+              {invitationSubtitle ?? "Sign up to start managing your team"}
+            </Typography>
+
+            {generalError && (
+              <Alert severity="error" sx={{ width: "100%", mb: 2 }}>
+                {generalError}
+              </Alert>
+            )}
+
+            <Box component="form" onSubmit={handleSubmit} sx={{ width: "100%" }}>
+              <TextField
+                margin="normal"
+                fullWidth
+                id="name"
+                label="Name (optional)"
+                name="name"
+                autoComplete="name"
+                value={formData.name}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                error={!!errors.name}
+                helperText={errors.name}
+              />
+              <TextField
+                margin="normal"
+                required
+                fullWidth
+                id="email"
+                label="Email Address"
+                name="email"
+                autoComplete="email"
+                autoFocus
+                value={formData.email}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                error={!!errors.email}
+                helperText={errors.email}
+                type="email"
+                disabled={!!invitationEmail}
+                inputProps={{
+                  inputMode: 'email',
+                }}
+              />
+              <TextField
+                margin="normal"
+                required
+                fullWidth
+                name="password"
+                label="Password"
+                type="password"
+                id="password"
+                autoComplete="new-password"
+                value={formData.password}
+                onChange={handleChange}
+                onBlur={handleBlur}
+                error={!!errors.password}
+                helperText={errors.password || "Minimum 8 characters"}
+              />
+              <Button
+                type="submit"
+                fullWidth
+                variant="contained"
+                sx={{ mt: 2.5, mb: 2 }}
+                disabled={isLoading || !formData.email || !formData.password || Object.keys(errors).some(key => errors[key])}
+              >
+                {isLoading ? "Creating account..." : "Sign up"}
+              </Button>
+              <Box sx={{ textAlign: "center" }}>
+                <Typography variant="body2" color="text.secondary">
+                  Already have an account?{" "}
+                  <MuiLink component={Link} href="/login" underline="hover">
+                    Log in
+                  </MuiLink>
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+        </Paper>
+      </Container>
+    </Box>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense
+      fallback={
+        <Box
+          sx={{
+            flexGrow: 1,
+            minHeight: 320,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            bgcolor: "background.default",
+          }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            Loading...
+          </Typography>
+        </Box>
+      }
+    >
+      <SignupForm />
+    </Suspense>
+  );
+}

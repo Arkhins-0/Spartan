@@ -1,0 +1,112 @@
+name: Architecture Decision Records
+
+on:
+  # Must stay `pull_request`. The governing-decisions job below holds
+  # `pull-requests: write`; switching to `pull_request_target` would combine
+  # that write token with a checkout of untrusted fork code. Fork PRs get a
+  # read-only token here, so the comment step catches the permission error --
+  # `isPermissionError` is 401/403/404, since a fork token is refused with a
+  # 404 as readily as a 403 -- writes the body to a notice annotation and
+  # returns without failing. That is the intended behaviour, not a bug to
+  # "fix" by changing the trigger.
+  #
+  # The read-only branch is now observed rather than only read from the
+  # action's source: `mbeacom/adrkit-t018-dogfood` run 31773014051 (attempt 2,
+  # job `degrade-read-only`) dispatched the Action under `pull-requests: read`,
+  # logged "no permission to comment on this PR (read-only token); posting the
+  # result to the job log instead", stayed green, and wrote no comment. That
+  # run is a PROXY -- a same-repo pull request holding a downgraded token, not
+  # a pull request from a fork -- so it evidences the read-only-token
+  # condition but not fork provenance. A genuine fork PR remains unobserved
+  # here, so ADR-0001 action item 8 stays open; see #306.
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: adr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Validate the decision corpus
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: latest
+
+      # --ignore-scripts skips the Prisma postinstall, which needs a
+      # DATABASE_URL that linting markdown records has no use for.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Lint ADR corpus
+        run: bun run adr:lint
+
+      # `adrkit lint` exits 0 on an empty corpus and only warns on a record whose
+      # filename stops being discoverable, so either would merge green. This
+      # also holds the four committed adrkit version pins to one value.
+      - name: Check ADR corpus and version-pin integrity
+        run: bun run adr:check-integrity
+
+  # Enforcement of a decision, not validation of the corpus, so it is a job of
+  # its own rather than a step in `lint`. It lives in this workflow because
+  # this workflow runs on pull requests: `bun run lint` -- which carries the
+  # equivalent ESLint rules -- runs only in release.yml and tag-release.yml,
+  # both push-triggered, so an ESLint rule alone would let a violation merge
+  # green and break the release pipeline afterwards. See #310.
+  raw-sql:
+    name: Enforce the ADR-0003 raw-SQL prohibition
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: latest
+
+      # No `bun install`: the check imports only node: builtins, precisely so
+      # it cannot be defeated by a dependency or install failure.
+      - name: Check for prohibited raw SQL
+        run: bun run check:raw-sql
+
+  governing-decisions:
+    name: Comment governing decisions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # Pinned to the immutable v0.12.0 commit rather than the moving @v0 tag,
+      # matching the ADR-0001 decision to pin adrkit exactly.
+      - name: Resolve decisions governing this pull request
+        uses: mbeacom/adrkit/packages/ci@2f19524f07938f1a7841b9f58bbcd1313e60a4dc # v0.12.0
+        env:
+          # Inert as pinned, and safe to delete. Through v0.6.0 the action
+          # recognised its own comment only when the resolved token equalled
+          # $GITHUB_TOKEN, which Actions does not export, so without this block
+          # the marker lookup was skipped and every push appended another
+          # comment (adrkit #107). v0.7.0 deleted that comparison: it now reads
+          # a refused `users.getAuthenticated` call as an app-installation
+          # token and claims its prior comment on `user.type == 'Bot'` plus the
+          # marker leading the body (adrkit ADR-0026). The variable survives
+          # only as a fallback *source* -- `getInput('token') ||
+          # process.env.GITHUB_TOKEN` -- and `with: token:` below is always
+          # set, so this is never read.
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          dir: docs/adr
+          token: ${{ github.token }}

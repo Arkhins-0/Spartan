@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
+      - '!.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0, or leave empty for auto)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  discussions: write
+
+# Two merges landing close together start two runs that compute the SAME next
+# version from the same latest tag, then race to create it -- exactly what
+# happened when #341 and #342 merged nine seconds apart. Serialize instead.
+#
+# `cancel-in-progress: false`, matching adr-badges.yml: cancelling a run that
+# has already pushed a tag would leave the tag without its GitHub release, which
+# is worse than waiting. The duplicate is handled by the existing tag_check
+# step, which the second run reaches only after the first has finished.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    env:
+      # Prisma client generation runs during bun install. A real secret is used
+      # when available; the fallback only satisfies generate-time URL parsing.
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/spartan_ci' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma Client
+        run: bun run db:generate
+
+      - name: Run type check
+        run: bun run type-check
+
+      - name: Run linter
+        run: bun run lint
+
+      - name: Run build
+        run: bun run build
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Get the latest tag
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            echo "Latest tag: ${LATEST_TAG:-none}"
+
+            if [ -z "$LATEST_TAG" ]; then
+              # No tags exist, start from 0.0.0 and check all commits
+              MAJOR=0
+              MINOR=0
+              PATCH=0
+              COMMITS=$(git log --pretty=format:"%s")
+            else
+              # Remove 'v' prefix if present
+              LATEST_VERSION=${LATEST_TAG#v}
+
+              # Parse version components
+              IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+
+              # Check commit messages for version bump type
+              COMMITS=$(git log ${LATEST_TAG}..HEAD --pretty=format:"%s")
+            fi
+
+            if echo "$COMMITS" | grep -qiE "^(feat|feature)(\(.+\))?!:|^BREAKING CHANGE:|breaking change"; then
+              # Major version bump for breaking changes
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+            elif echo "$COMMITS" | grep -qiE "^(feat|feature)(\(.+\))?:"; then
+              # Minor version bump for new features
+              MINOR=$((MINOR + 1))
+              PATCH=0
+            else
+              # Patch version bump for fixes and other changes
+              PATCH=$((PATCH + 1))
+            fi
+
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Tag v$VERSION already exists — skipping tag creation and release (handled by tag-release workflow)"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "🆕 Tag v$VERSION does not exist — will create tag and release"
+          fi
+
+      # There is deliberately no "bump package.json and push to main" step here.
+      #
+      # The `main` ruleset requires four status checks, and a direct push from
+      # this job produces none of them, so the push was rejected with GH013 and
+      # the job died before ever reaching the tag and release steps below —
+      # which are the steps that actually matter and which the ruleset does not
+      # govern (it targets branches; there is no tag protection).
+      #
+      # The bump was safe to drop rather than work around: the version above is
+      # derived from `git describe --tags`, so tags are already the source of
+      # truth, and nothing reads `package.json`'s version at build or runtime.
+      # Restoring the bump means re-breaking releases unless the ruleset gains
+      # a bypass for the Actions app (id 15368) — which would let any workflow
+      # holding `contents: write` push to main past all four required checks.
+      #
+      # `package.json` therefore trails the latest tag by design. Read the
+      # version from the newest tag or the GitHub release, not from the file.
+
+      - name: Create Git tag
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          # `git tag -a` is annotated, so it writes a tagger ident and fails with
+          # "empty ident name" without one. The identity used to be set by the
+          # version-bump step that stood here; it is configured locally now so
+          # that it lives in the step that actually needs it.
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@62c96d0c4e8a889135c1f3a25910db8dbe0e85f7 # v2.3.4
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          discussion_category_name: 'Announcements'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify success
+        if: success() && steps.tag_check.outputs.exists == 'false'
+        run: |
+          echo "✅ Release v${{ steps.version.outputs.version }} created successfully!"
+          echo "🔗 View release: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }}"
+
+      - name: Notify skipped
+        if: steps.tag_check.outputs.exists == 'true'
+        run: |
+          echo "⏭️ Release skipped — tag v${{ steps.version.outputs.version }} was already created manually"
+          echo "🔗 The tag-release workflow handles manually pushed tags"

@@ -1,0 +1,123 @@
+"use client";
+
+import { useOptimistic, useTransition } from "react";
+import { Box, Button, Stack } from "@mui/material";
+import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import CancelIcon from "@mui/icons-material/Cancel";
+import HelpIcon from "@mui/icons-material/Help";
+import { submitRSVP } from "@/lib/actions/rsvp";
+import { trackRSVP } from "@/lib/analytics/umami";
+
+type RSVPStatus = "GOING" | "NOT_GOING" | "MAYBE" | "NO_RESPONSE";
+
+interface RSVPButtonsProps {
+  eventId: string;
+  currentStatus: RSVPStatus;
+  /**
+   * When set, responses are recorded for this guarded player (per-child
+   * RSVP row, identity graph Tier 3). Omit/null for the viewer's own
+   * self/household response — the default, unchanged behavior.
+   */
+  playerId?: string | null;
+  onStatusChange?: (status: RSVPStatus) => void;
+}
+
+export function RSVPButtons({
+  eventId,
+  currentStatus,
+  playerId,
+  onStatusChange,
+}: RSVPButtonsProps) {
+  const [isPending, startTransition] = useTransition();
+  const [optimisticStatus, setOptimisticStatus] =
+    useOptimistic<RSVPStatus>(currentStatus);
+
+  const handleRSVP = (status: "GOING" | "NOT_GOING" | "MAYBE") => {
+    startTransition(async () => {
+      // Optimistically update the UI
+      setOptimisticStatus(status);
+
+      // Call the server action (playerId present → answer on behalf of a
+      // guarded player; absent → the viewer's own self/household response)
+      const result = await submitRSVP({
+        eventId,
+        status,
+        ...(playerId ? { playerId } : {}),
+      });
+
+      if (result.success) {
+        // Track RSVP event
+        const rsvpStatusMap = {
+          GOING: 'going',
+          NOT_GOING: 'not-going',
+          MAYBE: 'maybe',
+        } as const;
+        trackRSVP(rsvpStatusMap[status], { eventId });
+
+        // Notify parent component if callback provided
+        onStatusChange?.(status);
+      } else {
+        // On error, the page will revalidate and show the actual status
+        console.error("Failed to update RSVP:", result.error);
+      }
+    });
+  };
+
+  return (
+    <Box sx={{ width: "100%" }}>
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={2}
+        sx={{ width: "100%" }}
+      >
+        <Button
+          variant={optimisticStatus === "GOING" ? "contained" : "outlined"}
+          color="success"
+          startIcon={<CheckCircleIcon />}
+          onClick={() => handleRSVP("GOING")}
+          disabled={isPending}
+          fullWidth
+          sx={{
+            minHeight: 48,
+            textTransform: "none",
+            fontWeight: optimisticStatus === "GOING" ? 600 : 400,
+          }}
+        >
+          Going
+        </Button>
+
+        <Button
+          variant={optimisticStatus === "MAYBE" ? "contained" : "outlined"}
+          color="warning"
+          startIcon={<HelpIcon />}
+          onClick={() => handleRSVP("MAYBE")}
+          disabled={isPending}
+          fullWidth
+          sx={{
+            minHeight: 48,
+            textTransform: "none",
+            fontWeight: optimisticStatus === "MAYBE" ? 600 : 400,
+          }}
+        >
+          Maybe
+        </Button>
+
+        <Button
+          variant={optimisticStatus === "NOT_GOING" ? "contained" : "outlined"}
+          color="error"
+          startIcon={<CancelIcon />}
+          onClick={() => handleRSVP("NOT_GOING")}
+          disabled={isPending}
+          fullWidth
+          sx={{
+            minHeight: 48,
+            textTransform: "none",
+            fontWeight: optimisticStatus === "NOT_GOING" ? 600 : 400,
+          }}
+        >
+          Not Going
+        </Button>
+      </Stack>
+    </Box>
+  );
+}

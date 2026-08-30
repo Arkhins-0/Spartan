@@ -1,0 +1,204 @@
+import { z } from 'zod'
+
+// Environment variable schema
+const envSchema = z.object({
+    // Database
+    DATABASE_URL: z.string().url('DATABASE_URL must be a valid PostgreSQL connection string'),
+
+    // Authentication
+    NEXTAUTH_URL: z.string().url('NEXTAUTH_URL must be a valid URL'),
+    NEXTAUTH_SECRET: z.string().min(32, 'NEXTAUTH_SECRET must be at least 32 characters long'),
+
+    // Email Service — provider is optional; when unset it is inferred from
+    // credentials (MAILCHIMP_API_KEY -> mailchimp, AWS_REGION -> ses) and
+    // falls back to a log-only provider so the app boots without email creds.
+    EMAIL_PROVIDER: z.enum(['ses', 'mailchimp', 'log']).optional(),
+    MAILCHIMP_API_KEY: z.string().optional(),
+    EMAIL_FROM: z.string().email('EMAIL_FROM must be a valid email address'),
+
+    // Node Environment
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+
+    // Cron job authentication
+    CRON_SECRET: z.string().min(32, 'CRON_SECRET must be at least 32 characters long').optional(),
+
+    // Protected uptime/readiness checks
+    UPTIME_CHECK_TOKEN: z.string().min(32, 'UPTIME_CHECK_TOKEN must be at least 32 characters long').optional(),
+
+    // Analytics and Tracking (optional)
+    NEXT_PUBLIC_UMAMI_WEBSITE_ID: z.string().optional(),
+    NEXT_PUBLIC_GA_MEASUREMENT_ID: z.string().optional(),
+    NEXT_PUBLIC_SENTRY_DSN: z.string().optional(),
+    SENTRY_ORG: z.string().optional(),
+    SENTRY_PROJECT: z.string().optional(),
+    SENTRY_AUTH_TOKEN: z.string().optional(),
+    NEXT_PUBLIC_VERCEL_ANALYTICS_ID: z.string().optional(),
+    NEXT_PUBLIC_HOTJAR_ID: z.string().optional(),
+    NEXT_PUBLIC_MIXPANEL_TOKEN: z.string().optional(),
+
+    // Optional AWS variables (for future migration)
+    AWS_REGION: z.string().optional(),
+
+    // Payments — Stripe Connect (optional; payments disabled when unset)
+    STRIPE_SECRET_KEY: z.string().optional(),
+    STRIPE_CONNECT_WEBHOOK_SECRET: z.string().optional(),
+    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().optional(),
+    // Default platform application fee in basis points (e.g. 250 = 2.5%). Overridable per organization.
+    STRIPE_PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(10000).optional(),
+
+    // Object storage (optional; uploads disabled when nothing is configured).
+    // STORAGE_PROVIDER selects the backend; when unset it is inferred from
+    // credentials (S3_BUCKET -> s3, BLOB_READ_WRITE_TOKEN -> vercel-blob).
+    STORAGE_PROVIDER: z.enum(['s3', 'vercel-blob', 'none']).optional(),
+    S3_BUCKET: z.string().optional(),
+    S3_REGION: z.string().optional(),
+    // Any S3-compatible endpoint (Cloudflare R2, MinIO, Backblaze B2).
+    S3_ENDPOINT: z.string().url('S3_ENDPOINT must be a valid URL').optional(),
+    S3_FORCE_PATH_STYLE: z.enum(['true', 'false']).optional(),
+    BLOB_READ_WRITE_TOKEN: z.string().optional(),
+    // Signup-event waitlist offer claim window in hours (clamped to event start at runtime)
+    EVENT_WAITLIST_CLAIM_HOURS: z.coerce.number().int().min(1).max(168).optional(),
+    // Minimum age classification allowing game scores/statistics (USA Hockey ADM: no stats at 8U and below)
+    STATS_MIN_AGE_LEVEL: z
+        .enum(['U6', 'U8', 'SQUIRT_U10', 'PEEWEE_U12', 'BANTAM_U14', 'U16', 'U18', 'JUNIOR', 'ADULT', 'OPEN'])
+        .optional(),
+})
+
+// Validate environment variables
+function validateEnv() {
+    // Skip validation during build time and test time
+    if (process.env.NEXT_PHASE === 'phase-production-build' || process.env.NODE_ENV === 'test') {
+        return {
+            DATABASE_URL: process.env.DATABASE_URL || '',
+            NEXTAUTH_URL: process.env.NEXTAUTH_URL || '',
+            NEXTAUTH_SECRET: process.env.NEXTAUTH_SECRET || '',
+            EMAIL_PROVIDER: process.env.EMAIL_PROVIDER as Env['EMAIL_PROVIDER'],
+            MAILCHIMP_API_KEY: process.env.MAILCHIMP_API_KEY,
+            EMAIL_FROM: process.env.EMAIL_FROM || '',
+            NODE_ENV: (process.env.NODE_ENV || 'development') as 'development' | 'production' | 'test',
+            CRON_SECRET: process.env.CRON_SECRET,
+            UPTIME_CHECK_TOKEN: process.env.UPTIME_CHECK_TOKEN,
+            NEXT_PUBLIC_UMAMI_WEBSITE_ID: process.env.NEXT_PUBLIC_UMAMI_WEBSITE_ID,
+            NEXT_PUBLIC_GA_MEASUREMENT_ID: process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID,
+            NEXT_PUBLIC_SENTRY_DSN: process.env.NEXT_PUBLIC_SENTRY_DSN,
+            SENTRY_ORG: process.env.SENTRY_ORG,
+            SENTRY_PROJECT: process.env.SENTRY_PROJECT,
+            SENTRY_AUTH_TOKEN: process.env.SENTRY_AUTH_TOKEN,
+            NEXT_PUBLIC_VERCEL_ANALYTICS_ID: process.env.NEXT_PUBLIC_VERCEL_ANALYTICS_ID,
+            NEXT_PUBLIC_HOTJAR_ID: process.env.NEXT_PUBLIC_HOTJAR_ID,
+            NEXT_PUBLIC_MIXPANEL_TOKEN: process.env.NEXT_PUBLIC_MIXPANEL_TOKEN,
+            AWS_REGION: process.env.AWS_REGION,
+            STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+            STRIPE_CONNECT_WEBHOOK_SECRET: process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+            STRIPE_PLATFORM_FEE_BPS: process.env.STRIPE_PLATFORM_FEE_BPS
+                ? Number(process.env.STRIPE_PLATFORM_FEE_BPS)
+                : undefined,
+            STORAGE_PROVIDER: process.env.STORAGE_PROVIDER as Env['STORAGE_PROVIDER'],
+            S3_BUCKET: process.env.S3_BUCKET,
+            S3_REGION: process.env.S3_REGION,
+            S3_ENDPOINT: process.env.S3_ENDPOINT,
+            S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE as Env['S3_FORCE_PATH_STYLE'],
+            BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN,
+            EVENT_WAITLIST_CLAIM_HOURS: process.env.EVENT_WAITLIST_CLAIM_HOURS
+                ? Number(process.env.EVENT_WAITLIST_CLAIM_HOURS)
+                : undefined,
+            STATS_MIN_AGE_LEVEL: process.env.STATS_MIN_AGE_LEVEL as Env['STATS_MIN_AGE_LEVEL'],
+        }
+    }
+
+    try {
+        const env = envSchema.parse(process.env)
+        assertEmailProviderConfig(env)
+        assertStorageProviderConfig(env)
+        return env
+    } catch (error) {
+        if (error instanceof z.ZodError) {
+            const missingVars = error.issues.map((err: z.ZodIssue) => {
+                const path = err.path.join('.')
+                return `❌ ${path}: ${err.message}`
+            }).join('\n')
+
+            console.error('🚨 Environment variable validation failed:\n')
+            console.error(missingVars)
+            console.error('\n📋 Required environment variables:')
+            console.error('   DATABASE_URL - PostgreSQL connection string')
+            console.error('   NEXTAUTH_URL - Application URL (e.g., http://localhost:3000)')
+            console.error('   NEXTAUTH_SECRET - Random secret (generate with: openssl rand -base64 32)')
+            console.error('   EMAIL_FROM - Sender email address')
+            console.error('\n📧 Email provider (optional — emails are logged, not sent, when unconfigured):')
+            console.error('   EMAIL_PROVIDER=ses       requires AWS_REGION (+ AWS credentials)')
+            console.error('   EMAIL_PROVIDER=mailchimp requires MAILCHIMP_API_KEY')
+            console.error('\n💡 Copy .env.example to .env.local and fill in the values')
+
+            process.exit(1)
+        }
+        throw error
+    }
+}
+
+/**
+ * An explicitly selected email provider must have its credentials present.
+ * (When EMAIL_PROVIDER is unset the provider is inferred at send time and no
+ * credentials are required — sends fall back to the log provider.)
+ */
+function assertEmailProviderConfig(env: z.infer<typeof envSchema>): void {
+    if (env.EMAIL_PROVIDER === 'mailchimp' && !env.MAILCHIMP_API_KEY) {
+        console.error('🚨 EMAIL_PROVIDER=mailchimp requires MAILCHIMP_API_KEY to be set')
+        process.exit(1)
+    }
+    if (env.EMAIL_PROVIDER === 'ses' && !env.AWS_REGION) {
+        console.error('🚨 EMAIL_PROVIDER=ses requires AWS_REGION to be set (credentials via AWS env vars or Vercel OIDC)')
+        process.exit(1)
+    }
+}
+
+/**
+ * An explicitly selected storage provider must have its credentials present,
+ * for the same reason as email: a misconfigured provider should fail at boot,
+ * not when someone files a medical certificate.
+ */
+function assertStorageProviderConfig(env: z.infer<typeof envSchema>): void {
+    if (env.STORAGE_PROVIDER === 's3' && !env.S3_BUCKET) {
+        console.error('🚨 STORAGE_PROVIDER=s3 requires S3_BUCKET to be set (credentials via AWS env vars or Vercel OIDC)')
+        process.exit(1)
+    }
+    if (env.STORAGE_PROVIDER === 'vercel-blob' && !env.BLOB_READ_WRITE_TOKEN) {
+        console.error('🚨 STORAGE_PROVIDER=vercel-blob requires BLOB_READ_WRITE_TOKEN to be set')
+        process.exit(1)
+    }
+}
+
+// Export validated environment variables
+export const env = validateEnv()
+
+// Type-safe environment variables
+export type Env = z.infer<typeof envSchema>
+
+// Helper function to check if we're in production
+export const isProduction = env.NODE_ENV === 'production'
+export const isDevelopment = env.NODE_ENV === 'development'
+export const isTest = env.NODE_ENV === 'test'
+
+// Helper to get the base URL
+export const getBaseUrl = () => {
+    if (typeof window !== 'undefined') {
+        // Browser should use relative URL
+        return ''
+    }
+
+    // On the server, NEXTAUTH_URL is guaranteed to be set by env validation.
+    return env.NEXTAUTH_URL
+}
+
+// Payments helpers
+export const isStripeConfigured = Boolean(env.STRIPE_SECRET_KEY)
+export const DEFAULT_PLATFORM_FEE_BPS = env.STRIPE_PLATFORM_FEE_BPS ?? 0
+
+// Object storage helpers — provider resolution lives in lib/storage.
+export const isBlobConfigured = Boolean(env.BLOB_READ_WRITE_TOKEN)
+export const isS3Configured = Boolean(env.S3_BUCKET)
+
+// Signup-event helpers
+export const EVENT_WAITLIST_CLAIM_HOURS = env.EVENT_WAITLIST_CLAIM_HOURS ?? 24
+export const STATS_MIN_AGE_LEVEL = env.STATS_MIN_AGE_LEVEL ?? 'SQUIRT_U10'

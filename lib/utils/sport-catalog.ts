@@ -1,0 +1,123 @@
+import type { AgeClassification, ScheduleFormat, Sport } from "@prisma/client";
+import { AGE_CLASSIFICATION_LABELS, AGE_CLASSIFICATION_OPTIONS } from "@/lib/utils/age-level";
+
+/**
+ * Per-sport capability catalog keyed by the Prisma `Sport` enum.
+ *
+ * Hockey is first-class (FR-032): its entry carries USA Hockey age labels,
+ * rink terminology, and a fuller set of suggested schedule formats. Every
+ * other sport degrades gracefully (FR-031/033) to a neutral entry — correct
+ * sport label, generic "Surface" terminology, and plain age labels.
+ *
+ * Surface subdivision is a property of the physical surface, not the sport:
+ * segmentation presets key off `SurfaceType` in `lib/utils/segment-presets.ts`
+ * (feature 006, research R7) and games reference `SurfaceSegment` rows.
+ *
+ * The catalog is code, not data: type-safe, testable, and liftable to the
+ * database later without changing call sites (research R3).
+ */
+export type SportCapabilities = {
+  sport: Sport;
+  sportLabel: string;
+  surfaceLabel: string;
+  ageClassifications: { value: AgeClassification; label: string }[];
+  suggestedFormats: ScheduleFormat[];
+};
+
+export const SCHEDULE_FORMAT_LABELS: Record<ScheduleFormat, string> = {
+  ROUND_ROBIN: "Round robin",
+  SINGLE_ELIMINATION: "Single elimination",
+  DOUBLE_ELIMINATION: "Double elimination",
+  POOL_PLAY: "Pool play",
+  LADDER: "Ladder",
+  CUSTOM: "Custom",
+};
+
+/** Formats the platform can generate schedules for (others are label-only). */
+export const GENERATIVE_FORMATS: ReadonlySet<ScheduleFormat> = new Set<ScheduleFormat>([
+  "ROUND_ROBIN",
+]);
+
+const SPORT_LABELS: Record<Sport, string> = {
+  HOCKEY: "Hockey",
+  LACROSSE: "Lacrosse",
+  SOCCER: "Soccer",
+  BASKETBALL: "Basketball",
+  BASEBALL: "Baseball",
+  SOFTBALL: "Softball",
+  FOOTBALL: "Football",
+  VOLLEYBALL: "Volleyball",
+  MOTORSPORT: "Motorsport",
+  OTHER: "Other",
+};
+
+/** Sport-neutral age labels — no hockey vocabulary (FR-033). */
+const NEUTRAL_AGE_CLASSIFICATION_LABELS: Record<AgeClassification, string> = {
+  U6: "U6",
+  U8: "U8",
+  SQUIRT_U10: "U10",
+  PEEWEE_U12: "U12",
+  BANTAM_U14: "U14",
+  U16: "U16",
+  U18: "U18",
+  JUNIOR: "Junior",
+  ADULT: "Adult",
+  OPEN: "Open",
+};
+
+function ageClassificationOptions(
+  labels: Record<AgeClassification, string>
+): { value: AgeClassification; label: string }[] {
+  return AGE_CLASSIFICATION_OPTIONS.map((value) => ({ value, label: labels[value] }));
+}
+
+function neutralCapabilities(sport: Sport): SportCapabilities {
+  return {
+    sport,
+    sportLabel: SPORT_LABELS[sport],
+    surfaceLabel: "Surface",
+    ageClassifications: ageClassificationOptions(NEUTRAL_AGE_CLASSIFICATION_LABELS),
+    suggestedFormats: ["ROUND_ROBIN"],
+  };
+}
+
+const HOCKEY_CAPABILITIES: SportCapabilities = {
+  sport: "HOCKEY",
+  sportLabel: SPORT_LABELS.HOCKEY,
+  surfaceLabel: "Rink",
+  ageClassifications: ageClassificationOptions(AGE_CLASSIFICATION_LABELS),
+  suggestedFormats: ["ROUND_ROBIN", "SINGLE_ELIMINATION", "POOL_PLAY"],
+};
+
+// Motorsport competes on a circuit, and a championship round is a single
+// multi-entrant grid rather than a fixture between two teams — so no
+// head-to-head format is suggested. Rounds and points live on RaceRound /
+// RaceResult, not on the two-team SeasonGame schedule generator.
+const MOTORSPORT_CAPABILITIES: SportCapabilities = {
+  sport: "MOTORSPORT",
+  sportLabel: SPORT_LABELS.MOTORSPORT,
+  surfaceLabel: "Circuit",
+  ageClassifications: ageClassificationOptions(NEUTRAL_AGE_CLASSIFICATION_LABELS),
+  suggestedFormats: ["CUSTOM"],
+};
+
+const SPORT_CATALOG: Record<Sport, SportCapabilities> = {
+  HOCKEY: HOCKEY_CAPABILITIES,
+  LACROSSE: neutralCapabilities("LACROSSE"),
+  SOCCER: neutralCapabilities("SOCCER"),
+  BASKETBALL: neutralCapabilities("BASKETBALL"),
+  BASEBALL: neutralCapabilities("BASEBALL"),
+  SOFTBALL: neutralCapabilities("SOFTBALL"),
+  FOOTBALL: neutralCapabilities("FOOTBALL"),
+  VOLLEYBALL: neutralCapabilities("VOLLEYBALL"),
+  MOTORSPORT: MOTORSPORT_CAPABILITIES,
+  OTHER: neutralCapabilities("OTHER"),
+};
+
+/**
+ * Resolve capabilities for a sport. Unknown context (null/undefined) resolves
+ * to the neutral OTHER entry so callers never need to branch (FR-031).
+ */
+export function getSportCapabilities(sport: Sport | null | undefined): SportCapabilities {
+  return SPORT_CATALOG[sport ?? "OTHER"];
+}

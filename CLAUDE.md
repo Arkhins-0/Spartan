@@ -1,0 +1,678 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Spartan is a free, open-source sports team management platform built with Next.js 16, React 19, and TypeScript. The application uses a modern stack with MUI v7 (with Emotion), Tailwind CSS v4, Prisma 7 with PostgreSQL (Neon), and Auth.js for authentication. The project follows a mobile-first design philosophy and uses Next.js Server Actions as the primary data mutation pattern.
+
+## Development Commands
+
+### Essential Commands
+```bash
+# Development
+bun run dev              # Start dev server with Turbopack at localhost:3000
+bun run dev:wake         # Wake database then start dev (for Neon serverless)
+bun run build            # Production build
+bun run start            # Start production server
+bun run type-check       # TypeScript type checking (run before commits)
+bun run lint             # ESLint
+
+# Testing
+bun run test             # Run tests with Vitest
+bun run test:watch       # Run tests in watch mode
+bun run test:coverage    # Generate coverage report
+bun run test:ui          # Open Vitest UI
+
+# Database Operations
+bun run db:studio        # Open Prisma Studio (visual database browser)
+bun run db:migrate       # Create and apply migration (development)
+bun run db:migrate:deploy # Deploy migrations (production only)
+bun run db:migrate:reset # Reset database - DESTRUCTIVE (dev only)
+bun run db:generate      # Generate Prisma Client (run after schema changes)
+bun run db:push          # Push schema changes without migration (dev prototyping)
+bun run db:seed          # Run seed script
+bun run db:wake          # Wake up Neon database (serverless)
+
+# Utilities
+bun run validate-env     # Validate environment variables
+```
+
+**Important**: Always use `bun` (not `npm` or `yarn`) for package management and running scripts.
+
+### Single Test Execution
+```bash
+# Run a specific test file
+bun run test __tests__/lib/utils/validation.test.ts
+
+# Run tests matching a pattern
+bun run test --grep "event validation"
+
+# Watch a specific test file
+bun run test:watch __tests__/lib/utils/validation.test.ts
+```
+
+## High-Level Architecture
+
+### Tech Stack Philosophy
+- **Framework**: Next.js 16 App Router (NOT Pages Router) with React 19
+- **Data Mutations**: Server Actions first, API routes only for webhooks/external integrations
+- **Data Fetching**: React Server Components by default, Client Components only when needed
+- **Styling**: MUI v7 with Emotion + Tailwind CSS v4 (MUI is primary component library; Tailwind for utility styling)
+- **Database**: Prisma 7 ORM with PostgreSQL - parameterized queries prevent SQL injection; config in `prisma/prisma.config.ts`
+- **Validation**: Zod v4 (API differs from v3 — check schemas carefully)
+- **Authentication**: Auth.js v5 with credential provider, bcrypt password hashing
+- **Email**: Provider-agnostic `sendEmail()` seam — AWS SES (recommended) or Mailchimp Transactional, selected via `EMAIL_PROVIDER`
+
+### Application Structure
+
+```
+app/                              # Next.js App Router
+├── (auth)/                      # Public auth routes (login, signup)
+├── (marketing)/                 # Public marketing pages (about, pricing, etc.)
+├── (dashboard)/                 # Protected routes requiring authentication
+│   ├── layout.tsx               # Dashboard layout with navigation
+│   ├── page.tsx                 # Team dashboard (default view)
+│   ├── roster/                  # Roster management
+│   ├── calendar/                # Event calendar views
+│   ├── events/                  # Event creation and details
+│   ├── seasons/                 # Season & game scheduling (phases, proposals, placement)
+│   ├── venues/                  # Venue CRUD
+│   ├── league/                  # League management (if applicable)
+│   ├── practice-planner/        # Practice session planning with rink board
+│   ├── dashboard/               # Main dashboard view
+│   └── admin/                   # Admin-only features
+├── api/                         # API routes (minimal - prefer Server Actions)
+│   ├── auth/[...nextauth]/      # Auth.js endpoints
+│   ├── cron/                    # Scheduled jobs (RSVP reminders, notification batches)
+│   ├── invitations/             # Invitation acceptance webhooks
+│   ├── leagues/                 # League API (team listing)
+│   └── roster/export/           # CSV roster export (GET endpoint — file download, not a mutation)
+└── docs/                        # Documentation pages
+
+components/                      # React components
+├── features/                    # Feature-specific components (grouped by domain)
+│   ├── roster/                  # RosterList, PlayerCard, AddPlayerDialog, TeamOfficialCard
+│   ├── dashboard/               # DashboardNav, DashboardSidebar
+│   ├── events/                  # EventForm, EventCard, RSVPButton
+│   ├── seasons/                 # SeasonList, SeasonForm, GameForm, GenerationWizard, PlacementBoard
+│   ├── practice-planner/        # RinkBoard, DrawingToolbar, PlayEditor, PlayLibrary
+│   └── navigation/              # MobileNavigation, Breadcrumbs
+├── ui/                          # Generic reusable UI primitives
+└── providers/                   # Context providers (LeagueProvider, ThemeProvider, etc.)
+
+lib/                             # Core application logic
+├── actions/                     # Server Actions (primary mutation method)
+│   ├── auth.ts                  # Signup, login (no raw queries, uses Prisma)
+│   ├── team.ts                  # Team CRUD
+│   ├── roster.ts                # Player management
+│   ├── events.ts                # Event scheduling
+│   ├── rsvp.ts                  # Attendance tracking
+│   ├── invitations.ts           # Email invitations
+│   ├── league.ts                # League management
+│   ├── league-context.ts        # League context resolution helpers
+│   ├── team-context.ts          # Team context resolution helpers
+│   ├── communication.ts         # Messaging system
+│   ├── notifications.ts         # Notification preferences
+│   ├── permissions.ts           # Permission checks
+│   ├── admin.ts                 # Admin operations
+│   ├── audit.ts                 # Audit logging
+│   ├── logout.ts                # Logout action
+│   ├── plays.ts                 # Play/drill management (practice planner)
+│   ├── practice-sessions.ts     # Practice session management
+│   ├── practice-session-queries.ts # Read-only practice session queries
+│   ├── seasons.ts               # Season + phase CRUD
+│   ├── season-games.ts          # Season game scheduling, Event/RSVP fan-out, scores
+│   ├── season-generation.ts     # Opt-in round-robin generation (preview + drafts)
+│   ├── game-proposals.ts        # Team-to-team game proposal threads
+│   ├── placements.ts            # Pre-season skill placement into divisions
+│   ├── venue-surfaces.ts        # Surface segmentation (drawn zones, coexistence)
+│   ├── venue-layout.ts          # Venue schematic layout (public facility map)
+│   └── venues.ts                # Venue management
+├── auth/                        # Authentication utilities
+│   ├── config.ts                # Auth.js configuration
+│   └── session.ts               # Session helpers (requireAuth, requireTeamAdmin, etc.)
+├── db/
+│   └── prisma.ts                # Prisma Client singleton
+├── email/                       # Email service abstraction
+│   ├── client.ts                # sendEmail() seam (SES / Mailchimp / log providers)
+│   └── templates.ts             # Email templates
+├── utils/                       # Shared utilities
+│   ├── validation.ts            # Zod schemas
+│   ├── date.ts                  # Date formatting
+│   ├── permissions.ts           # Permission utilities
+│   ├── security.ts              # Security utilities
+│   ├── sanitization.ts          # Input sanitization helpers
+│   ├── rate-limit.ts            # Rate limiting
+│   ├── error-handling.ts        # Error utilities
+│   ├── csv.ts                   # CSV generation primitives
+│   ├── csv-export.ts            # Roster/data export helpers
+│   ├── league-mode.ts           # League vs standalone team mode detection
+│   └── data-migration.ts        # Data migration utilities
+└── hooks/                       # React hooks for Client Components
+
+types/                           # Shared TypeScript types
+├── roster.ts                    # Player, TeamOfficial, export types
+├── events.ts                    # Event and RSVP types
+├── practice-planner.ts          # Practice session and play types
+├── auth.ts                      # Session and auth types
+└── invitations.ts               # Invitation types
+
+specs/                           # SpecKit feature specifications
+└── <feature-name>/              # One folder per feature
+    ├── spec.md                  # Feature specification
+    ├── plan.md                  # Implementation plan
+    ├── tasks.md                 # Task breakdown
+    └── ...
+
+prisma/
+├── schema.prisma                # Database schema (single source of truth)
+└── migrations/                  # Migration history
+```
+
+### Database Schema Architecture
+
+The Prisma schema (`prisma/schema.prisma`) defines the complete data model:
+
+**Core Models**:
+- `User` - Authentication and user profiles
+- `Team` - Team information (can be standalone or part of a league)
+- `TeamMember` - Junction table linking users to teams with roles (ADMIN/MEMBER)
+- `Player` - Roster entries (may or may not have User accounts)
+- `Event` - Games and practices with scheduling
+- `RSVP` - Attendance responses (GOING, NOT_GOING, MAYBE, NO_RESPONSE)
+- `Invitation` - Email invitations with tokens and expiration
+
+**League Models** (optional - teams can exist without leagues):
+- `League` - Multi-team organization
+- `Division` - Grouping within leagues (age groups, skill levels)
+- `LeagueUser` - League membership with roles (LEAGUE_ADMIN, TEAM_ADMIN, MEMBER)
+- `PlayerTransfer` - Audit trail for player moves between teams
+
+**Communication Models**:
+- `LeagueMessage` - Targeted messages to divisions/teams/entire league
+- `MessageTargeting` - Defines message recipients
+- `MessageRecipient` - Delivery tracking
+- `NotificationPreference` - User notification settings
+- `NotificationBatch` - Batched message delivery
+- `BatchedMessage` - Individual messages in a batch
+
+**Audit Model**:
+- `AuditLog` - Administrative actions and security events
+
+**Key Schema Patterns**:
+1. Optional league relationships (`leagueId?`) allow teams to operate standalone or within leagues
+2. Indexes on frequently queried fields (userId, teamId, leagueId, date ranges)
+3. Cascading deletes (`onDelete: Cascade`) for proper cleanup
+4. `@unique` constraints enforce data integrity
+
+### Authentication Flow
+
+**Pattern**: Every Server Action must validate authentication first
+```typescript
+// Standard auth pattern in Server Actions
+const userId = await requireUserId(); // Throws and redirects if not authenticated
+```
+
+**Key Auth Helpers** (`lib/auth/session.ts`):
+- `requireAuth()` - Redirects to login if not authenticated, returns session
+- `requireUserId()` - Returns userId or redirects to login
+
+**Auth Error Handling**: Login/signup pages display user-friendly error messages (not raw exceptions). Auth Server Actions return structured `ActionResult` with descriptive error strings for the UI.
+- `requireTeamAdmin(teamId)` - Ensures user is ADMIN role for team
+- `requireTeamMember(teamId)` - Ensures user belongs to team
+- `requireLeagueRole(leagueId, role)` - Ensures user has required league role
+- `isSystemAdmin(userId)` - Check if user is league admin
+
+**Role Hierarchy**:
+- **Team Level**: `ADMIN` (full team control) and `MEMBER` (view + RSVP)
+- **League Level**: `LEAGUE_ADMIN` (full league control), `TEAM_ADMIN` (manage own team), `MEMBER` (basic access)
+
+### Server Actions Pattern
+
+Server Actions are the primary method for data mutations (not API routes). They follow a consistent pattern:
+
+```typescript
+"use server";
+
+import { z } from "zod";
+import { prisma } from "@/lib/db/prisma";
+import { requireUserId } from "@/lib/auth/session";
+import { revalidatePath } from "next/cache";
+
+export type ActionResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string; details?: unknown };
+
+export async function myAction(input: InputType): Promise<ActionResult<OutputType>> {
+  try {
+    // 1. Always authenticate first
+    const userId = await requireUserId();
+
+    // 2. Validate input with Zod
+    const validated = mySchema.parse(input);
+
+    // 3. Check authorization (team admin, etc.)
+    await requireTeamAdmin(validated.teamId);
+
+    // 4. Perform database operation
+    const result = await prisma.model.create({
+      data: validated,
+    });
+
+    // 5. Revalidate affected pages
+    revalidatePath("/path");
+
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: "Friendly error message" };
+  }
+}
+```
+
+**Critical Security Rules**:
+1. NEVER trust client input - always validate with Zod
+2. ALWAYS check authentication first (`requireUserId()`)
+3. ALWAYS verify authorization (admin role, team membership)
+4. ALWAYS use Prisma (parameterized queries) - NEVER raw SQL (enforced by `bun run check:raw-sql` and ESLint, not just convention - see ADR-0003)
+5. ALWAYS sanitize user input displayed in UI
+6. NEVER expose sensitive data (emergency contacts to non-admins)
+
+### Data Fetching Strategy
+
+**Default: React Server Components**
+```typescript
+// app/(dashboard)/roster/page.tsx
+export default async function RosterPage({ params }: { params: { teamId: string } }) {
+  // Fetch directly in Server Component
+  const players = await prisma.player.findMany({
+    where: { teamId: params.teamId },
+  });
+
+  return <RosterList players={players} />;
+}
+```
+
+**Only use Client Components when you need**:
+- User interactions (forms, buttons)
+- Browser APIs (localStorage, window)
+- React hooks (useState, useEffect)
+- Optimistic updates (useOptimistic for RSVP buttons)
+
+### Security Implementation
+
+**Comprehensive security measures** (see `docs/SECURITY_IMPLEMENTATION.md` for details):
+
+1. **Authentication**: Auth.js with bcrypt password hashing (cost factor 12)
+2. **Authorization**: Role-based access control checked in every Server Action
+3. **Input Validation**: Zod schemas on all user inputs (client and server)
+4. **SQL Injection Prevention**: Prisma ORM with parameterized queries (no raw SQL)
+5. **XSS Prevention**: React's built-in escaping + CSP headers
+6. **CSRF Protection**: Auth.js built-in token validation
+7. **HTTPS Enforcement**: Proxy (`proxy.ts`) redirects HTTP to HTTPS in production
+8. **Rate Limiting**: Applied to API routes (auth: 5 req/15min, general: 100 req/15min)
+9. **Security Headers**: Configured in `next.config.ts` (HSTS, CSP, X-Frame-Options, etc.)
+10. **Password Security**: Minimum length 8 chars, bcrypt hashing
+11. **Session Management**: HTTP-only cookies, secure JWT tokens
+12. **Data Sanitization**: Input sanitization for user-generated content
+
+**Critical Security Headers** (`next.config.ts`):
+- `Strict-Transport-Security`: HTTPS enforcement
+- `Content-Security-Policy`: Prevents XSS attacks
+- `X-Frame-Options: SAMEORIGIN`: Prevents clickjacking
+- `X-Content-Type-Options: nosniff`: MIME type sniffing protection
+
+### Mobile-First Design
+
+**Responsive Breakpoints** (MUI theme):
+- `xs`: <600px (mobile)
+- `sm`: 600-960px (tablet)
+- `md`: >960px (desktop)
+
+**Key Mobile Patterns**:
+- Bottom navigation on mobile, sidebar on desktop
+- Calendar: grid view on desktop, list view on mobile
+- Touch targets: minimum 44x44px
+- Forms optimized for mobile input (proper keyboard types)
+- Tables convert to card layouts on mobile
+
+### Email Service Architecture
+
+Email is provider-agnostic behind `sendEmail()` in `lib/email/client.ts`:
+- Providers: AWS SES (`@aws-sdk/client-sesv2`, recommended), Mailchimp Transactional (legacy), and a dev-only `log` provider
+- Selection: `EMAIL_PROVIDER` env var, or inferred from credentials (`MAILCHIMP_API_KEY` → mailchimp, `AWS_REGION` → ses), else `log`
+- The app boots without email credentials; in production an unconfigured send throws at send time (never at boot)
+- SES sends one API call per recipient so recipients never see each other's addresses (matches Mailchimp's `preserve_recipients: false` default)
+- All templates in `lib/email/templates.ts` call `sendEmail()` — never import a provider SDK directly
+
+**Email Templates** (`lib/email/templates.ts`):
+- Team invitations with signup links
+- Event notifications (created/updated/cancelled)
+- RSVP reminders (48 hours before events)
+- Welcome emails for new users
+- League announcements
+- Targeted messages by division/team
+
+**Cron Jobs** (`app/api/cron/`):
+- RSVP reminders: Runs hourly, sends reminders 48 hours before events
+
+### Object Storage Architecture
+
+File uploads (association documents, event galleries) go through the provider seam in `lib/storage/` (ADR-0010) — never import `@aws-sdk/client-s3` or `@vercel/blob` from application code:
+- `lib/storage/index.ts` — `createUploadGrant()`, `resolveUploadedRef()`, `getReadUrl()`, `deleteObjectBestEffort()`; provider resolved from `STORAGE_PROVIDER` or inferred from credentials
+- `lib/storage/policy.ts` — content-type allowlists, size caps, key prefixes (`leagues/{id}/documents/`, `signup-events/{id}/`), MIME-derived extensions
+- `lib/storage/upload-route.ts` — `handleUploadGrantRequest()`: the shared body of every `/upload` route; the route authorizes, then delegates
+- `lib/storage/client.ts` — `uploadToStorage()` for Client Components: asks the grant route, PUTs bytes straight to storage, returns the `key` for the finalize action
+- Rows store `storageProvider` + `storageKey` (an object key on S3, the blob URL on Vercel Blob), never a URL; read URLs are minted per request (short-lived presigned GET on S3)
+- The S3 bucket must be private; the CSP in `next.config.ts` derives the allowed storage origin from `S3_BUCKET`/`S3_REGION`/`S3_ENDPOINT` at build time
+
+### Environment Configuration
+
+**Required Environment Variables** (validate with `bun run validate-env`):
+```bash
+DATABASE_URL           # PostgreSQL connection string (must include ?sslmode=require for Neon)
+NEXTAUTH_URL           # Application URL (http://localhost:3000 for dev)
+NEXTAUTH_SECRET        # Generate with: openssl rand -base64 32
+EMAIL_FROM             # Verified sender email address
+```
+
+**Optional Variables**:
+```bash
+EMAIL_PROVIDER                # ses | mailchimp | log (inferred from credentials when unset)
+STORAGE_PROVIDER              # s3 | vercel-blob | none (inferred: S3_BUCKET -> s3, BLOB_READ_WRITE_TOKEN -> vercel-blob)
+S3_BUCKET / S3_REGION         # Private S3-compatible bucket for documents + galleries (S3_ENDPOINT, S3_FORCE_PATH_STYLE for R2/MinIO/B2)
+BLOB_READ_WRITE_TOKEN         # Vercel Blob alternative
+AWS_REGION                     # SES region (EMAIL_PROVIDER=ses; credentials via AWS env vars)
+MAILCHIMP_API_KEY              # Mailchimp Transactional API key (EMAIL_PROVIDER=mailchimp)
+NEXT_PUBLIC_UMAMI_WEBSITE_ID  # Umami analytics (privacy-friendly)
+```
+
+## Working with the Codebase
+
+### Making Database Changes
+
+**Workflow for schema modifications**:
+```bash
+# 1. Edit prisma/schema.prisma
+# 2. Create and apply migration
+bun run db:migrate
+# 3. Generate updated Prisma Client (updates TypeScript types)
+bun run db:generate
+# 4. Test changes
+bun run dev
+```
+
+**Migration commands**:
+- Development: `bun run db:migrate` (creates migration files and applies them)
+- Production: `bun run db:migrate:deploy` (applies existing migrations)
+- Prototyping: `bun run db:push` (skips migration files, direct schema push)
+
+**Important**: Always commit both `schema.prisma` and migration files together.
+
+### Adding New Features
+
+**Standard feature implementation flow**:
+
+1. **Define validation schema** (`lib/utils/validation.ts`):
+```typescript
+export const myFeatureSchema = z.object({
+  field: z.string().min(1, "Required"),
+});
+export type MyFeatureInput = z.infer<typeof myFeatureSchema>;
+```
+
+2. **Create Server Action** (`lib/actions/my-feature.ts`):
+```typescript
+"use server";
+export async function myFeatureAction(input: MyFeatureInput) {
+  const userId = await requireUserId();
+  const validated = myFeatureSchema.parse(input);
+  // ... implementation
+}
+```
+
+3. **Build UI component** (`components/features/my-feature/`):
+```typescript
+"use client"; // Only if user interaction needed
+export function MyFeatureForm() {
+  // Form with client-side validation using Zod schema
+}
+```
+
+4. **Create page** (`app/(dashboard)/my-feature/page.tsx`):
+```typescript
+// Server Component for data fetching
+export default async function MyFeaturePage() {
+  const data = await prisma.model.findMany();
+  return <MyFeatureForm data={data} />;
+}
+```
+
+### Testing Practices
+
+**Test structure**:
+```typescript
+import { describe, it, expect } from 'vitest';
+
+describe('Feature Name', () => {
+  it('should handle valid input', () => {
+    // Test implementation
+  });
+
+  it('should reject invalid input', () => {
+    // Test validation
+  });
+});
+```
+
+**Key testing areas**:
+- Zod validation schemas
+- Server Action logic (mock Prisma)
+- React components (Testing Library)
+- Integration tests for critical flows
+
+**Pre-existing test failures** (not regressions — do not attempt to fix):
+- `theme-marketing.test.ts` — marketing theme variant tests
+- `DragDropTeams.test.tsx` — DnD context issues
+
+### Common Gotchas
+
+1. **Always use Server Actions, not API routes** - API routes only for webhooks/cron
+2. **Never forget `"use server"` directive** - Required at top of Server Action files
+3. **Never trust client input** - Always validate with Zod on server
+4. **Prisma Client must be regenerated** - After schema changes, run `bun run db:generate`
+5. **Revalidate paths after mutations** - Use `revalidatePath()` in Server Actions
+6. **Emergency contacts are admin-only** - Never expose to regular members
+7. **Player vs User distinction** - Player is roster entry, User is authenticated account
+8. **League relationships are optional** - Teams can exist standalone (leagueId is nullable)
+9. **Zod v4 is in use** - API differs from Zod v3 (e.g., `z.string().min()` still works, but some advanced patterns changed)
+10. **`proxy.ts` not `middleware.ts`** - Next.js 16 renamed middleware to proxy; runs on Node.js runtime
+
+### Proxy Configuration
+
+**Proxy** (`proxy.ts`, Next.js 16 replacement for `middleware.ts`) handles:
+- HTTPS enforcement in production
+- Rate limiting for API routes (auth: 5 req/15min, general: 100 req/15min)
+- Security header injection (X-Robots-Tag)
+- Applied to all routes except static files (`_next/static`, `_next/image`, `favicon.ico`)
+
+### Deployment Notes
+
+**Automatic on Vercel** (configured in `vercel.json`):
+- Build command: `bun run build`
+- Install command: `bun install`
+- Prisma Client generation: Runs automatically via `postinstall` script (`prisma generate`)
+- Environment variables: Must be configured in Vercel dashboard
+
+**Pre-deployment checklist**:
+1. All environment variables set in Vercel
+2. Database connection tested
+3. Email service configured (domain verified)
+4. `bun run type-check` passes
+5. `bun run lint` passes
+6. `bun run test` passes
+
+### Architecture Decision Records
+
+Architectural decisions are recorded as machine-readable ADRs in `docs/adr/`,
+managed by [adrkit](https://github.com/mbeacom/adrkit) (`@adrkit/cli`, pinned to
+0.12.0). See [ADR-0001](./docs/adr/0001-record-architecture-decisions-as-versioned-markdown-in-git.md)
+for why.
+
+`CLAUDE.md` describes *how to work here*; ADRs record *why the conventions are
+what they are*, what alternatives were rejected, and what would make each
+decision wrong. When a convention in this file has a governing ADR, the ADR is
+the authority.
+
+```bash
+bun run adr:lint                      # validate the whole corpus
+bun run adr:check-integrity           # non-empty corpus, discoverable filenames,
+                                      # and agreeing adrkit version pins
+bun run adr:review-dates              # decisions past, or near, their reviewBy
+bun run adr:queue                     # decisions awaiting review (the ARB queue)
+bun run adr:check-reports             # validate the generated badge reports
+bun run adr:explain lib/actions/x.ts  # which decisions govern this file?
+bun run adr:check <changed files...>  # decisions governing a change set
+bun run adr:new "Use X for Y"         # scaffold a new record
+bun run adr:graph -- --format dot     # supersession/relationship graph
+bun run check:raw-sql                 # enforce the ADR-0003 raw-SQL prohibition
+                                      # (also a job in .github/workflows/adr.yml)
+```
+
+**Before making an architectural change**, check what governs the paths you are
+about to touch — `adrkit explain` (or the `adrkit` MCP server, registered in
+`.mcp.json` and `.vscode/mcp.json`) surfaces `rejected` and `superseded`
+decisions too, so a previously-tried approach is not re-proposed.
+
+The CLI ships two binaries, `adrkit` and `adr`, and they are the same program.
+Invoke it as **`adrkit`**: `adr` on npm belongs to an unrelated package of the
+same name, so a tree carrying both would resolve `node_modules/.bin/adr` by
+install order rather than by intent. The `bun run adr:*` script names above are
+this repository's own namespace and are unaffected.
+
+The Copilot cloud agent and Copilot code review use a repository-level MCP
+setting that is not a file in this repo; the value to paste into repository
+settings is documented in `.github/copilot-cloud-agent-mcp.md`.
+
+**Write a new ADR when** a change alters one of the decisions in `docs/adr/`, or
+introduces a new one that future work should be constrained by. Routine feature
+work does not need one. Fill in `affects` — a record without it is advisory only
+and will not surface in `adrkit explain` or the CI comment.
+
+Current records:
+
+| ID | Decision |
+|----|----------|
+| 0001 | Record architecture decisions as versioned markdown in git |
+| 0002 | Use Next.js Server Actions as the primary mutation surface |
+| 0003 | Access PostgreSQL exclusively through Prisma on Neon serverless |
+| 0004 | Build the interface on MUI as the primary component library |
+| 0005 | Standardize on Bun as the development and CI toolchain |
+| 0006 | Model league-owned gear with ledger projections and an outbox |
+| 0007 | Use canonical venue reservations for occupancy |
+| 0008 | Keep core association operations free and provider-portable |
+| 0009 | Delegate association authority through scoped role grants |
+| 0010 | Access object storage through a provider seam (S3 or Vercel Blob) |
+| 0011 | Model race weekends as rounds with sessions and open volunteer signup (proposed) |
+
+Spec Kit users additionally have `/speckit.adrkit.context`,
+`/speckit.adrkit.check`, and `/speckit.adrkit.draft` from the installed adrkit
+extension. `/speckit.plan` offers an optional `after_plan` check.
+
+CI (`.github/workflows/adr.yml`) lints the corpus on every pull request and
+comments the decisions governing the changed files.
+
+The two ADR badges in `README.md` — corpus size and ARB queue depth — are a
+recipe over JSON adrkit already emits, not a hosted service. When the corpus
+changes on `main`, `.github/workflows/adr-badges.yml` regenerates
+`.adrkit/lint.json` (`$.checked`) and `.adrkit/queue.json` (`$.totalItems`),
+validates them with `bun run adr:check-reports`, and force-pushes them as a
+single orphan commit to the dedicated **`badges`** branch, which is what
+shields.io reads. It does not write to `main`: the `main` ruleset requires four
+status checks that a workflow push cannot produce, so publishing there was
+rejected with GH013. A malformed report renders as `no result` rather than
+failing, so it is validated before it is published; regenerate the pair locally
+with the same two commands the workflow runs if you need to inspect them.
+
+The `.adrkit/*.json` committed on `main` are a point-in-time snapshot, not the
+published artifact — the `badges` branch is. Do not trust main's copies to be
+current, and do not "fix" the workflow by pointing it back at `main`.
+
+### CI/CD and Releases
+
+Spartan uses semantic versioning with conventional commits:
+- `feat:` commits trigger minor version bump (0.X.0)
+- `fix:` commits trigger patch version bump (0.0.X)
+- `feat!:` or `BREAKING CHANGE:` trigger major version bump (X.0.0)
+
+**What gates a pull request** (`.github/workflows/quality-gates.yml`):
+type-check, lint, and the full Vitest suite. Until #310 these ran nowhere on a
+PR — `type-check` and `lint` only on push to `main`, and `bun run test` in no
+workflow at all — so a change that broke a test merged green and surfaced later
+in the release pipeline. Alongside these run the ADR corpus checks, the runtime
+smoke tests, deployment checks, and CodeQL.
+
+**Release process**:
+1. Merge to `main` branch triggers automated release workflow
+2. GitHub Actions runs type-checking, linting, and the build
+3. Semantic version determined from commit messages, derived from the latest
+   git tag (`git describe --tags`) — tags are the source of truth
+4. Changelog generated automatically
+5. Git tag pushed and GitHub release created with assets
+
+`package.json`'s `version` is deliberately **not** bumped and therefore trails
+the latest tag. The workflow used to commit that bump to `main`, but the `main`
+ruleset rejects workflow pushes, and the failure aborted the job before it ever
+tagged or released. Nothing reads the field at build or runtime, so it was
+dropped rather than worked around. Read the version from the newest tag or the
+GitHub release — the README's version badge does.
+
+See `.github/AUTOMATION.md` for full CI/CD details.
+
+### Documentation Resources
+
+**Project Documentation**:
+- `README.md` - Comprehensive setup and feature documentation
+- `docs/adr/` - Architecture decision records (adrkit); the *why* behind the conventions
+- `SETUP.md` - Development setup and implementation progress
+- `DEPLOYMENT.md` - Detailed deployment guide
+- `SECURITY.md` - Security policy and vulnerability reporting
+- `docs/SECURITY_IMPLEMENTATION.md` - Security measures and implementation details
+- `.github/CONTRIBUTING.md` - Contribution guidelines
+- `.github/AUTOMATION.md` - CI/CD and release automation
+
+**External Documentation**:
+- Next.js 16: https://nextjs.org/docs
+- React 19: https://react.dev
+- MUI v7: https://mui.com/material-ui/
+- Prisma: https://www.prisma.io/docs
+- Auth.js: https://authjs.dev/
+- Zod: https://zod.dev/
+
+## License
+
+Apache License 2.0 - see [LICENSE](./LICENSE). The source code is free to use, fork, modify, self-host, and use commercially (including as a hosted/SaaS service). The "Spartan" name and logo are trademarks of Arkhins and are NOT granted by the code license - see [TRADEMARKS.md](./TRADEMARKS.md) (nominative/factual references like "a fork of Spartan" are fine).
+
+## Active Technologies
+- TypeScript with Next.js 16 App Router and React 19 + MUI v7/Emotion, Prisma 7, Neon PostgreSQL adapter, Auth.js v5, Zod v4, Bun (002-ice-rink-management)
+- PostgreSQL through Prisma; public logo assets require object/file storage integration selected during implementation (002-ice-rink-management)
+- TypeScript, Next.js 16 App Router, React 19 + MUI v7/Emotion, Prisma 7, Neon PostgreSQL adapter, Auth.js v5, (004-signup-events)
+- PostgreSQL via Prisma (amounts in cents); object storage via the `lib/storage` seam — private S3 with signed reads, or Vercel Blob (004-signup-events, ADR-0010)
+- TypeScript (strict) on Next.js 16 App Router, React 19 + MUI v7 + Emotion, Prisma 7 (Neon PostgreSQL adapter), Auth.js v5, Zod v4, Bun (005-season-scheduling)
+- PostgreSQL via Prisma; new models `Season`, `SeasonPhase`, `SeasonGame`, `GameProposal`, `GameProposalEntry`, `PlacementDecision`; `Division.ageClassification` added; `GameSchedule`/`ScheduleGame` dropped (005-season-scheduling)
+- TypeScript (strict), Next.js 16 App Router, React 19 + MUI v7 + Emotion, Prisma 7 (Neon), Auth.js v5, Zod v4, Bun; SVG-based editors (no new deps) (006-surface-segmentation)
+- PostgreSQL via Prisma; new `SurfaceSegment` + `SegmentCoexistence` models; `segmentId` on SeasonGame/EventGame/VenueScheduleBlock; `venueId/surfaceId/segmentId/startAt` on PracticeSession; `Venue.layout Json?`; `IceSurface.wholeLabel`; REMOVE `IceUsage` enum + `surfaceUsage`/`zoneLabel` (SeasonGame) + `iceUsage`/`zoneLabel` (EventGame) (006-surface-segmentation)
+
+## Recent Changes
+- 002-ice-rink-management: Added TypeScript with Next.js 16 App Router and React 19 + MUI v7/Emotion, Prisma 7, Neon PostgreSQL adapter, Auth.js v5, Zod v4, Bun
+- 002-ice-rink-management: Added venue organization onboarding, branded public rink profiles, venue staff roles, multi-surface scheduling models, and public rink discovery contracts.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

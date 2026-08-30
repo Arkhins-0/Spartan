@@ -1,0 +1,2439 @@
+import { sendEmail, type EmailMessage } from "./client";
+import { prisma } from "@/lib/db/prisma";
+import { FALLBACK_TIME_ZONE, formatDateTime } from "@/lib/utils/date";
+import { getBaseUrl } from "@/lib/env";
+import { notificationService } from "@/lib/services/notification";
+
+const BASE_URL = getBaseUrl();
+
+type GearNotificationEmailData = {
+  email: string;
+  name?: string | null;
+  leagueId: string;
+  /**
+   * Rendered copy, supplied by the gear notification registry
+   * (`lib/services/gear-notification-registry.ts`), which is the single source
+   * of truth for what each gear event says. This template only lays it out.
+   */
+  copy: { subject: string; body: string };
+};
+
+/** Sends a generic, operational gear message. Payload is intentionally not rendered. */
+export async function sendGearNotificationEmail(data: GearNotificationEmailData): Promise<void> {
+  const { copy } = data;
+  const greeting = data.name ? `Hi ${escapeHtml(data.name)},` : "Hi there,";
+  const gearLink = `${BASE_URL}/league/${data.leagueId}/gear`;
+  await sendEmail({
+    to: [{ email: data.email, ...(data.name ? { name: data.name } : {}) }],
+    subject: copy.subject,
+    html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #1A1A1A;">${escapeHtml(copy.subject)}</h2>
+      <p>${greeting}</p><p>${escapeHtml(copy.body)}</p>
+      <p><a href="${gearLink}">Open gear workspace</a></p>
+    </div>`,
+    text: `${copy.subject}\n\n${data.name ? `Hi ${data.name},\n\n` : ""}${copy.body}\n\nOpen gear workspace: ${gearLink}`,
+  });
+}
+
+/**
+ * Escape a string for safe interpolation into HTML email bodies. Prevents
+ * HTML/script injection from user-controlled values (event titles, names,
+ * messages, locations, notes, etc.) rendered in recipients' emails.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+interface VerificationEmailData {
+  email: string;
+  name?: string | null;
+  /** Raw verification token — linked through the /verify-email/[token] page. */
+  token: string;
+}
+
+/**
+ * Send the email-address verification link a new (or email-changing) account
+ * must click before logging in. Token expires in 24 hours.
+ */
+export async function sendVerificationEmail(data: VerificationEmailData): Promise<void> {
+  const verifyLink = `${BASE_URL}/verify-email/${data.token}`;
+  const greeting = data.name ? `Hi ${escapeHtml(data.name)},` : "Hi there,";
+
+  await sendEmail({
+    subject: "Verify your email address",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">Verify your email address</h2>
+
+        <p>${greeting}</p>
+
+        <p>Thanks for signing up for Spartan. Please confirm this email address to activate your account.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${verifyLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Verify Email
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${verifyLink}">${verifyLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          This link expires in 24 hours. You can request a new one from the login page.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+        <p style="color: #999; font-size: 12px;">
+          If you didn't create a Spartan account, you can safely ignore this email.
+        </p>
+      </div>
+    `,
+    text: `Verify your email address
+
+Thanks for signing up for Spartan. Please confirm this email address to activate your account:
+${verifyLink}
+
+This link expires in 24 hours. You can request a new one from the login page.
+
+If you didn't create a Spartan account, you can safely ignore this email.`,
+    to: [{ email: data.email }],
+  });
+}
+
+interface PasswordResetEmailData {
+  email: string;
+  name?: string | null;
+  /** Raw reset token — linked through /reset-password/[token]. */
+  token: string;
+}
+
+/**
+ * Send a password-reset link. Token expires in 1 hour and is single-use.
+ */
+export async function sendPasswordResetEmail(data: PasswordResetEmailData): Promise<void> {
+  const resetLink = `${BASE_URL}/reset-password/${data.token}`;
+  const greeting = data.name ? `Hi ${escapeHtml(data.name)},` : "Hi there,";
+
+  await sendEmail({
+    subject: "Reset your Spartan password",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">Reset your password</h2>
+
+        <p>${greeting}</p>
+
+        <p>We received a request to reset the password for your Spartan account. Click the button below to choose a new password.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${resetLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Reset Password
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${resetLink}">${resetLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          This link expires in 1 hour and can be used once.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+        <p style="color: #999; font-size: 12px;">
+          If you didn't request a password reset, you can safely ignore this email — your password will not change.
+        </p>
+      </div>
+    `,
+    text: `Reset your password
+
+We received a request to reset the password for your Spartan account. Choose a new password here:
+${resetLink}
+
+This link expires in 1 hour and can be used once.
+
+If you didn't request a password reset, you can safely ignore this email - your password will not change.`,
+    to: [{ email: data.email }],
+  });
+}
+
+interface EmailChangeVerificationEmailData {
+  /** The NEW address the account wants to move to. */
+  newEmail: string;
+  name?: string | null;
+  /** Raw EMAIL_CHANGE token — linked through the /confirm-email-change/[token] page. */
+  token: string;
+}
+
+/**
+ * Sent to the NEW address during an email change; the account's email only
+ * changes when this link is clicked. Token expires in 24 hours.
+ */
+export async function sendEmailChangeVerificationEmail(
+  data: EmailChangeVerificationEmailData
+): Promise<void> {
+  const confirmLink = `${BASE_URL}/confirm-email-change/${data.token}`;
+  const greeting = data.name ? `Hi ${escapeHtml(data.name)},` : "Hi there,";
+
+  await sendEmail({
+    subject: "Confirm your new email address",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">Confirm your new email address</h2>
+
+        <p>${greeting}</p>
+
+        <p>You asked to move your Spartan account to this email address. Confirm the change below.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${confirmLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Confirm Email Change
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${confirmLink}">${confirmLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          This link expires in 24 hours. Until you confirm, your account keeps its current address.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+        <p style="color: #999; font-size: 12px;">
+          If you didn't request this change, you can safely ignore this email.
+        </p>
+      </div>
+    `,
+    text: `Confirm your new email address
+
+You asked to move your Spartan account to this email address. Confirm the change here:
+${confirmLink}
+
+This link expires in 24 hours. Until you confirm, your account keeps its current address.
+
+If you didn't request this change, you can safely ignore this email.`,
+    to: [{ email: data.newEmail }],
+  });
+}
+
+interface EmailChangedNoticeEmailData {
+  /** The OLD address, notified that the account moved away from it. */
+  oldEmail: string;
+  newEmail: string;
+  name?: string | null;
+}
+
+/**
+ * Security notice to the OLD address after an email change completes, so a
+ * hijacked-session change can't happen silently.
+ */
+export async function sendEmailChangedNoticeEmail(
+  data: EmailChangedNoticeEmailData
+): Promise<void> {
+  const greeting = data.name ? `Hi ${escapeHtml(data.name)},` : "Hi there,";
+
+  await sendEmail({
+    subject: "Your Spartan email address was changed",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">Your email address was changed</h2>
+
+        <p>${greeting}</p>
+
+        <p>The email address on your Spartan account was just changed to <strong>${escapeHtml(data.newEmail)}</strong>. This address no longer receives account email.</p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          If you made this change, no action is needed.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+        <p style="color: #999; font-size: 12px;">
+          If you did NOT make this change, your account may be compromised — reset your password immediately from the login page and contact support.
+        </p>
+      </div>
+    `,
+    text: `Your email address was changed
+
+The email address on your Spartan account was just changed to ${data.newEmail}. This address no longer receives account email.
+
+If you made this change, no action is needed.
+
+If you did NOT make this change, your account may be compromised - reset your password immediately from the login page and contact support.`,
+    to: [{ email: data.oldEmail }],
+  });
+}
+
+interface IceTimeRequestSubmittedEmailData {
+  managerEmails: string[];
+  venueName: string;
+  scheduleTitle: string;
+  contactName: string;
+  contactEmail: string;
+  requestId: string;
+  organizationId: string;
+  venueId: string;
+}
+
+interface VenueRelationshipInvitationEmailData {
+  email: string;
+  venueName: string;
+  relationshipType: "PREFERRED" | "HOME";
+  relationshipId: string;
+}
+
+export async function sendVenueRelationshipInvitationEmail(
+  data: VenueRelationshipInvitationEmailData
+): Promise<void> {
+  const invitationLink = `${BASE_URL}/venue-relationships/${data.relationshipId}`;
+  const relationshipLabel = data.relationshipType === "HOME" ? "home rink" : "preferred rink";
+
+  await sendEmail({
+    subject: `${data.venueName} invited you to add a ${relationshipLabel}`,
+    html: `<p>${escapeHtml(data.venueName)} invited you to add them as a ${relationshipLabel}.</p><p><a href="${invitationLink}">Review invitation</a></p>`,
+    text: `${data.venueName} invited you to add them as a ${relationshipLabel}. Review: ${invitationLink}`,
+    to: [{ email: data.email }]
+  });
+}
+
+interface VenueStaffInviteEmailData {
+  email: string;
+  organizationName: string;
+  inviterName: string;
+  /** VenueStaffRole enum value, e.g. "CONTENT_EDITOR". */
+  role: string;
+  organizationId: string;
+}
+
+/** "CONTENT_EDITOR" -> "content editor", "HEAD_COACH" -> "head coach". */
+function formatRoleLabel(role: string): string {
+  return role.toLowerCase().split("_").join(" ");
+}
+
+/**
+ * Notify an existing user that they were invited to a venue organization's
+ * staff, linking to the staff page where they can accept or decline.
+ */
+export async function sendVenueStaffInviteEmail(data: VenueStaffInviteEmailData): Promise<void> {
+  const staffLink = `${BASE_URL}/venue-admin/${data.organizationId}/staff`;
+  const roleLabel = formatRoleLabel(data.role);
+
+  await sendEmail({
+    subject: `${data.inviterName} invited you to help manage ${data.organizationName}`,
+    html: `<p>${escapeHtml(data.inviterName)} invited you to join the staff of <strong>${escapeHtml(data.organizationName)}</strong> on Spartan with the ${roleLabel} role.</p><p><a href="${staffLink}">Review invitation</a></p><p>If you didn't expect this invitation, you can safely ignore this email.</p>`,
+    text: `${data.inviterName} invited you to join the staff of ${data.organizationName} on Spartan with the ${roleLabel} role. Review: ${staffLink}\n\nIf you didn't expect this invitation, you can safely ignore this email.`,
+    to: [{ email: data.email }]
+  });
+}
+
+interface VenueStaffSignupInviteEmailData {
+  email: string;
+  organizationName: string;
+  inviterName: string;
+  /** VenueStaffRole enum value, e.g. "CONTENT_EDITOR". */
+  role: string;
+  /** Unified Invitation token — links through /api/invitations/[token]. */
+  token: string;
+}
+
+/**
+ * Invite someone WITHOUT a Spartan account to a venue organization's
+ * staff. The link routes through the unified invitation endpoint, which sends
+ * them to signup; the staff membership is created when they accept.
+ */
+export async function sendVenueStaffSignupInviteEmail(
+  data: VenueStaffSignupInviteEmailData
+): Promise<void> {
+  const invitationLink = `${BASE_URL}/api/invitations/${data.token}`;
+  const roleLabel = formatRoleLabel(data.role);
+
+  await sendEmail({
+    subject: `${data.inviterName} invited you to help manage ${data.organizationName}`,
+    html: `<p>${escapeHtml(data.inviterName)} invited you to join the staff of <strong>${escapeHtml(data.organizationName)}</strong> on Spartan with the ${roleLabel} role.</p><p>Create a free account to accept the invitation:</p><p><a href="${invitationLink}">Accept invitation</a></p><p style="color: #666; font-size: 14px;">This invitation will expire in 7 days. If you didn't expect it, you can safely ignore this email.</p>`,
+    text: `${data.inviterName} invited you to join the staff of ${data.organizationName} on Spartan with the ${roleLabel} role. Create a free account to accept the invitation: ${invitationLink}\n\nThis invitation will expire in 7 days. If you didn't expect it, you can safely ignore this email.`,
+    to: [{ email: data.email }]
+  });
+}
+
+interface TeamOfficialInviteEmailData {
+  email: string;
+  teamName: string;
+  inviterName: string;
+  /** TeamOfficialRole enum value, e.g. "HEAD_COACH". */
+  role: string;
+  /** Unified Invitation token — links through /api/invitations/[token]. */
+  token: string;
+}
+
+/**
+ * Invite someone WITHOUT a Spartan account to join a team as an official
+ * (coach, manager, treasurer, ...). Their TeamOfficial entry is linked to the
+ * account they create when accepting.
+ */
+export async function sendTeamOfficialInviteEmail(data: TeamOfficialInviteEmailData): Promise<void> {
+  const invitationLink = `${BASE_URL}/api/invitations/${data.token}`;
+  const roleLabel = formatRoleLabel(data.role);
+
+  await sendEmail({
+    subject: `${data.inviterName} invited you to join ${data.teamName} as ${roleLabel}`,
+    html: `<p>${escapeHtml(data.inviterName)} invited you to join <strong>${escapeHtml(data.teamName)}</strong> on Spartan as ${roleLabel}.</p><p>Create a free account to accept the invitation:</p><p><a href="${invitationLink}">Accept invitation</a></p><p style="color: #666; font-size: 14px;">This invitation will expire in 7 days. If you didn't expect it, you can safely ignore this email.</p>`,
+    text: `${data.inviterName} invited you to join ${data.teamName} on Spartan as ${roleLabel}. Create a free account to accept the invitation: ${invitationLink}\n\nThis invitation will expire in 7 days. If you didn't expect it, you can safely ignore this email.`,
+    to: [{ email: data.email }]
+  });
+}
+
+export async function sendIceTimeRequestSubmittedEmail(
+  data: IceTimeRequestSubmittedEmailData
+): Promise<void> {
+  const requestLink = `${BASE_URL}/venue-admin/${data.organizationId}/venues/${data.venueId}/requests?requestId=${encodeURIComponent(data.requestId)}`;
+
+  await sendEmail({
+    subject: `New ice time request for ${data.venueName}`,
+    html: `<p>${escapeHtml(data.contactName)} (${escapeHtml(data.contactEmail)}) requested ${escapeHtml(data.scheduleTitle)}.</p><p><a href="${requestLink}">Review request</a></p>`,
+    text: `${data.contactName} (${data.contactEmail}) requested ${data.scheduleTitle}. Review: ${requestLink}`,
+    to: data.managerEmails.map((email) => ({ email }))
+  });
+}
+
+interface IceTimeRequestDecisionEmailData {
+  contactEmail: string;
+  venueName: string;
+  status: "ACCEPTED" | "PARTIALLY_ACCEPTED" | "DECLINED";
+  decisionMessage?: string | null;
+}
+
+export async function sendIceTimeRequestDecisionEmail(
+  data: IceTimeRequestDecisionEmailData
+): Promise<void> {
+  const statusLabel =
+    data.status === "ACCEPTED"
+      ? "accepted"
+      : data.status === "PARTIALLY_ACCEPTED"
+        ? "partially accepted"
+        : "declined";
+
+  await sendEmail({
+    subject: `Your ice time request was ${statusLabel}`,
+    html: `<p>${escapeHtml(data.venueName)} ${statusLabel} your ice time request.</p>${data.decisionMessage ? `<p>${escapeHtml(data.decisionMessage)}</p>` : ""}`,
+    text: `${data.venueName} ${statusLabel} your ice time request.${data.decisionMessage ? `\n\n${data.decisionMessage}` : ""}`,
+    to: [{ email: data.contactEmail }]
+  });
+}
+
+interface SessionRegistrationConfirmationEmailData {
+  to: string;
+  participantName: string;
+  venueName: string;
+  offeringTitle: string;
+  quantity: number;
+  amountTotal: number; // cents
+  currency: string;
+  receiptUrl?: string | null;
+}
+
+function formatMoney(amountCents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amountCents / 100);
+  } catch {
+    return `${(amountCents / 100).toFixed(2)} ${currency}`;
+  }
+}
+
+/**
+ * Confirmation sent to the participant after a successful session/lesson registration.
+ */
+export async function sendSessionRegistrationConfirmationEmail(
+  data: SessionRegistrationConfirmationEmailData
+): Promise<void> {
+  const registrationsLink = `${BASE_URL}/my-registrations`;
+  const priceLine =
+    data.amountTotal > 0 ? ` Amount paid: ${formatMoney(data.amountTotal, data.currency)}.` : " This session is free.";
+  const receiptLine = data.receiptUrl ? `<p><a href="${data.receiptUrl}">View your receipt</a></p>` : "";
+
+  await sendEmail({
+    subject: `You're registered for ${data.offeringTitle}`,
+    html: `<p>Hi ${escapeHtml(data.participantName)},</p><p>You're registered for <strong>${escapeHtml(data.offeringTitle)}</strong> at ${escapeHtml(data.venueName)} (${data.quantity} spot${data.quantity === 1 ? "" : "s"}).${priceLine}</p>${receiptLine}<p><a href="${registrationsLink}">View your registrations</a></p>`,
+    text: `Hi ${data.participantName}, you're registered for ${data.offeringTitle} at ${data.venueName} (${data.quantity} spot(s)).${priceLine} View your registrations: ${registrationsLink}`,
+    to: [{ email: data.to }]
+  });
+}
+
+interface SessionRegistrationManagerEmailData {
+  managerEmails: string[];
+  venueName: string;
+  offeringTitle: string;
+  participantName: string;
+  quantity: number;
+}
+
+/**
+ * Notify rink managers that a new registration was received.
+ */
+export async function sendSessionRegistrationManagerEmail(
+  data: SessionRegistrationManagerEmailData
+): Promise<void> {
+  if (data.managerEmails.length === 0) return;
+
+  await sendEmail({
+    subject: `New registration for ${data.offeringTitle}`,
+    html: `<p>${escapeHtml(data.participantName)} registered for <strong>${escapeHtml(data.offeringTitle)}</strong> at ${escapeHtml(data.venueName)} (${data.quantity} spot${data.quantity === 1 ? "" : "s"}).</p>`,
+    text: `${data.participantName} registered for ${data.offeringTitle} at ${data.venueName} (${data.quantity} spot(s)).`,
+    to: data.managerEmails.map((email) => ({ email }))
+  });
+}
+
+interface InvitationEmailData {
+  email: string;
+  teamName: string;
+  inviterName: string;
+  token: string;
+}
+
+/**
+ * Send an invitation email to join a team
+ */
+export async function sendInvitationEmail(data: InvitationEmailData): Promise<void> {
+  const invitationLink = `${BASE_URL}/api/invitations/${data.token}`;
+
+  const message: EmailMessage = {
+    subject: `You've been invited to join ${data.teamName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">You've been invited to join ${escapeHtml(data.teamName)}</h2>
+
+        <p>Hi there,</p>
+
+        <p>${escapeHtml(data.inviterName)} has invited you to join <strong>${escapeHtml(data.teamName)}</strong> on Spartan.</p>
+
+        <p>Spartan is a free platform for managing sports teams. You'll be able to:</p>
+        <ul>
+          <li>View the team roster</li>
+          <li>See upcoming games and practices</li>
+          <li>RSVP to events</li>
+          <li>Stay connected with your team</li>
+        </ul>
+
+        <p style="margin: 30px 0;">
+          <a href="${invitationLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Accept Invitation
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${invitationLink}">${invitationLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          This invitation will expire in 7 days.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+        <p style="color: #999; font-size: 12px;">
+          If you didn't expect this invitation, you can safely ignore this email.
+        </p>
+      </div>
+    `,
+    text: `You've been invited to join ${data.teamName}
+
+${data.inviterName} has invited you to join ${data.teamName} on Spartan.
+
+Spartan is a free platform for managing sports teams. You'll be able to view the team roster, see upcoming games and practices, RSVP to events, and stay connected with your team.
+
+Accept your invitation by visiting:
+${invitationLink}
+
+This invitation will expire in 7 days.
+
+If you didn't expect this invitation, you can safely ignore this email.`,
+    to: [
+      {
+        email: data.email,
+      },
+    ],
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending invitation email:", error);
+    throw new Error("Failed to send invitation email");
+  }
+}
+
+interface ExistingUserNotificationData {
+  email: string;
+  teamName: string;
+  inviterName: string;
+}
+
+/**
+ * Courtesy "you've been added" notifications to EXISTING users honor the
+ * recipient's teamInvitations preference (emailEnabled + teamInvitations).
+ * Actual invitation emails to new users are transactional and are never
+ * gated — they have no account, so no preferences exist to consult.
+ */
+/**
+ * Resolve a user's effective notification preference row for a given context.
+ *
+ * Preferences are hybrid-scoped: a global row (leagueId=null) plus optional
+ * per-league override rows. A notification triggered in a league context uses
+ * that league's override if one exists, otherwise the global row. A context
+ * with no league (standalone team) uses the global row. Returns undefined when
+ * no matching row exists, which callers treat as "send" (schema default is on).
+ *
+ * This intentionally does NOT aggregate across every row: a league-scoped
+ * opt-out must not suppress notifications for unrelated teams/leagues.
+ */
+function pickPreference<T extends { leagueId: string | null }>(
+  rows: T[],
+  contextLeagueId: string | null
+): T | undefined {
+  if (contextLeagueId) {
+    const scoped = rows.find((r) => r.leagueId === contextLeagueId);
+    if (scoped) return scoped;
+  }
+  return rows.find((r) => r.leagueId === null);
+}
+
+async function shouldSendMembershipNotification(email: string): Promise<boolean> {
+  const recipient = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      notificationPreferences: {
+        where: { leagueId: null },
+        select: {
+          teamInvitations: true,
+          emailEnabled: true,
+        },
+      },
+    },
+  });
+
+  // Membership notices ("you were added to X") are cross-cutting, so they are
+  // governed by the user's global preference row only. A per-league override
+  // must not silence membership emails for unrelated teams/leagues.
+  const globalPref = recipient?.notificationPreferences[0];
+  if (!globalPref) return true;
+  return globalPref.teamInvitations && globalPref.emailEnabled;
+}
+
+/**
+ * Send a notification email to an existing user who was added to a team
+ */
+export async function sendExistingUserNotification(
+  data: ExistingUserNotificationData
+): Promise<void> {
+  if (!(await shouldSendMembershipNotification(data.email))) {
+    return;
+  }
+
+  const loginLink = `${BASE_URL}/login`;
+
+  const message: EmailMessage = {
+    subject: `You've been added to ${data.teamName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">You've been added to ${escapeHtml(data.teamName)}</h2>
+
+        <p>Hi there,</p>
+
+        <p>${escapeHtml(data.inviterName)} has added you to <strong>${escapeHtml(data.teamName)}</strong> on Spartan.</p>
+
+        <p>You can now view the team roster, see upcoming games and practices, and RSVP to events.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${loginLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Go to Spartan
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${loginLink}">${loginLink}</a>
+        </p>
+      </div>
+    `,
+    text: `You've been added to ${data.teamName}
+
+${data.inviterName} has added you to ${data.teamName} on Spartan.
+
+You can now view the team roster, see upcoming games and practices, and RSVP to events.
+
+Log in at: ${loginLink}`,
+    to: [
+      {
+        email: data.email,
+      },
+    ],
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending existing user notification:", error);
+    throw new Error("Failed to send notification email");
+  }
+}
+
+interface LeagueInvitationEmailData {
+  email: string;
+  leagueName: string;
+  inviterName: string;
+  /** Unified Invitation token — links through /api/invitations/[token]. */
+  token: string;
+}
+
+/**
+ * Invite someone WITHOUT a Spartan account to join a league. Their
+ * LeagueUser membership is created when they accept at signup.
+ */
+export async function sendLeagueInvitationEmail(data: LeagueInvitationEmailData): Promise<void> {
+  const invitationLink = `${BASE_URL}/api/invitations/${data.token}`;
+
+  const message = {
+    subject: `You've been invited to join the ${data.leagueName} league`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">You've been invited to join ${escapeHtml(data.leagueName)}</h2>
+
+        <p>Hi there,</p>
+
+        <p>${escapeHtml(data.inviterName)} has invited you to join the <strong>${escapeHtml(data.leagueName)}</strong> league on Spartan.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${invitationLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Accept Invitation
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${invitationLink}">${invitationLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          This invitation will expire in 7 days.
+        </p>
+
+        <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+        <p style="color: #999; font-size: 12px;">
+          If you didn't expect this invitation, you can safely ignore this email.
+        </p>
+      </div>
+    `,
+    text: `You've been invited to join the ${data.leagueName} league
+
+${data.inviterName} has invited you to join the ${data.leagueName} league on Spartan.
+
+Accept your invitation by visiting:
+${invitationLink}
+
+This invitation will expire in 7 days.
+
+If you didn't expect this invitation, you can safely ignore this email.`,
+    to: [{ email: data.email }],
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending league invitation email:", error);
+    throw new Error("Failed to send league invitation email");
+  }
+}
+
+interface LeagueMemberAddedEmailData {
+  email: string;
+  leagueName: string;
+  inviterName: string;
+  /** LeagueRole enum value, e.g. "TEAM_ADMIN". */
+  role: string;
+}
+
+/**
+ * Notify an existing user that they were added to a league.
+ */
+export async function sendLeagueMemberAddedNotification(
+  data: LeagueMemberAddedEmailData
+): Promise<void> {
+  if (!(await shouldSendMembershipNotification(data.email))) {
+    return;
+  }
+
+  const loginLink = `${BASE_URL}/login`;
+  const roleLabel = formatRoleLabel(data.role);
+
+  await sendEmail({
+    subject: `You've been added to the ${data.leagueName} league`,
+    html: `<p>${escapeHtml(data.inviterName)} added you to the <strong>${escapeHtml(data.leagueName)}</strong> league on Spartan as ${roleLabel}.</p><p><a href="${loginLink}">Log in</a> to see your league.</p><p style="color: #666; font-size: 14px;">If you didn't expect this, contact the league administrator.</p>`,
+    text: `${data.inviterName} added you to the ${data.leagueName} league on Spartan as ${roleLabel}. Log in to see your league: ${loginLink}\n\nIf you didn't expect this, contact the league administrator.`,
+    to: [{ email: data.email }]
+  });
+}
+
+interface EventCreatedEmailData {
+  emails: string[];
+  teamName: string;
+  eventType: string;
+  eventTitle: string;
+  eventDate: string;
+  eventLocation: string;
+  opponent?: string | null;
+  eventId: string;
+}
+
+/**
+ * Send notification emails when a new event is created
+ */
+export async function sendEventCreatedEmail(data: EventCreatedEmailData): Promise<void> {
+  const eventLink = `${BASE_URL}/events/${data.eventId}`;
+  const eventTypeLabel = data.eventType === "GAME" ? "Game" : "Practice";
+
+  const message: EmailMessage = {
+    subject: `New ${eventTypeLabel}: ${data.eventTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">New ${eventTypeLabel} Scheduled</h2>
+
+        <p>A new ${eventTypeLabel.toLowerCase()} has been added to <strong>${escapeHtml(data.teamName)}</strong>'s calendar.</p>
+
+        <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.eventTitle)}</h3>
+          <p style="margin: 10px 0;"><strong>Date & Time:</strong> ${data.eventDate}</p>
+          <p style="margin: 10px 0;"><strong>Location:</strong> ${escapeHtml(data.eventLocation)}</p>
+          ${data.opponent ? `<p style="margin: 10px 0;"><strong>Opponent:</strong> ${escapeHtml(data.opponent)}</p>` : ""}
+        </div>
+
+        <p style="margin: 30px 0;">
+          <a href="${eventLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            View Event & RSVP
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${eventLink}">${eventLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          Please RSVP to let your team know if you can attend.
+        </p>
+      </div>
+    `,
+    text: `New ${eventTypeLabel} Scheduled
+
+A new ${eventTypeLabel.toLowerCase()} has been added to ${data.teamName}'s calendar.
+
+${data.eventTitle}
+Date & Time: ${data.eventDate}
+Location: ${data.eventLocation}
+${data.opponent ? `Opponent: ${data.opponent}` : ""}
+
+View event and RSVP at:
+${eventLink}
+
+Please RSVP to let your team know if you can attend.`,
+    to: data.emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending event created email:", error);
+    throw new Error("Failed to send event notification email");
+  }
+}
+
+interface EventUpdatedEmailData {
+  emails: string[];
+  teamName: string;
+  eventType: string;
+  eventTitle: string;
+  eventDate: string;
+  eventLocation: string;
+  opponent?: string | null;
+  eventId: string;
+}
+
+/**
+ * Send notification emails when an event is updated
+ */
+export async function sendEventUpdatedEmail(data: EventUpdatedEmailData): Promise<void> {
+  const eventLink = `${BASE_URL}/events/${data.eventId}`;
+  const eventTypeLabel = data.eventType === "GAME" ? "Game" : "Practice";
+
+  const message: EmailMessage = {
+    subject: `Event Updated: ${data.eventTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #FF9800;">Event Updated</h2>
+
+        <p>An event for <strong>${escapeHtml(data.teamName)}</strong> has been updated.</p>
+
+        <div style="background-color: #fff3e0; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #FF9800;">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.eventTitle)}</h3>
+          <p style="margin: 10px 0;"><strong>Type:</strong> ${eventTypeLabel}</p>
+          <p style="margin: 10px 0;"><strong>Date & Time:</strong> ${data.eventDate}</p>
+          <p style="margin: 10px 0;"><strong>Location:</strong> ${escapeHtml(data.eventLocation)}</p>
+          ${data.opponent ? `<p style="margin: 10px 0;"><strong>Opponent:</strong> ${escapeHtml(data.opponent)}</p>` : ""}
+        </div>
+
+        <p style="margin: 30px 0;">
+          <a href="${eventLink}"
+             style="background-color: #FF9800; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            View Updated Event
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${eventLink}">${eventLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          Please review the updated details and confirm your RSVP if needed.
+        </p>
+      </div>
+    `,
+    text: `Event Updated
+
+An event for ${data.teamName} has been updated.
+
+${data.eventTitle}
+Type: ${eventTypeLabel}
+Date & Time: ${data.eventDate}
+Location: ${data.eventLocation}
+${data.opponent ? `Opponent: ${data.opponent}` : ""}
+
+View updated event at:
+${eventLink}
+
+Please review the updated details and confirm your RSVP if needed.`,
+    to: data.emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending event updated email:", error);
+    throw new Error("Failed to send event update notification email");
+  }
+}
+
+interface EventCancelledEmailData {
+  emails: string[];
+  teamName: string;
+  eventType: string;
+  eventTitle: string;
+  eventDate: string;
+}
+
+/**
+ * Send notification emails when an event is cancelled
+ */
+export async function sendEventCancelledEmail(data: EventCancelledEmailData): Promise<void> {
+  const calendarLink = `${BASE_URL}/calendar`;
+  const eventTypeLabel = data.eventType === "GAME" ? "Game" : "Practice";
+
+  const message: EmailMessage = {
+    subject: `Event Cancelled: ${data.eventTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #D32F2F;">Event Cancelled</h2>
+
+        <p>An event for <strong>${escapeHtml(data.teamName)}</strong> has been cancelled.</p>
+
+        <div style="background-color: #ffebee; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #D32F2F;">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.eventTitle)}</h3>
+          <p style="margin: 10px 0;"><strong>Type:</strong> ${eventTypeLabel}</p>
+          <p style="margin: 10px 0;"><strong>Was scheduled for:</strong> ${data.eventDate}</p>
+          <p style="margin: 10px 0; color: #D32F2F; font-weight: bold;">This event has been cancelled.</p>
+        </div>
+
+        <p style="margin: 30px 0;">
+          <a href="${calendarLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            View Calendar
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${calendarLink}">${calendarLink}</a>
+        </p>
+      </div>
+    `,
+    text: `Event Cancelled
+
+An event for ${data.teamName} has been cancelled.
+
+${data.eventTitle}
+Type: ${eventTypeLabel}
+Was scheduled for: ${data.eventDate}
+
+This event has been cancelled.
+
+View calendar at:
+${calendarLink}`,
+    to: data.emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending event cancelled email:", error);
+    throw new Error("Failed to send event cancellation notification email");
+  }
+}
+
+interface RSVPReminderEmailData {
+  email: string;
+  userName: string | null;
+  teamName: string;
+  eventType: string;
+  eventTitle: string;
+  eventDate: string;
+  eventLocation: string;
+  opponent?: string | null;
+  eventId: string;
+}
+
+/**
+ * Send RSVP reminder email to a member who hasn't responded
+ */
+export async function sendRSVPReminderEmail(data: RSVPReminderEmailData): Promise<void> {
+  const eventLink = `${BASE_URL}/events/${data.eventId}`;
+  const eventTypeLabel = data.eventType === "GAME" ? "Game" : "Practice";
+  const greeting = data.userName ? `Hi ${data.userName}` : "Hi there";
+
+  const message: EmailMessage = {
+    subject: `RSVP Reminder: ${data.eventTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">RSVP Reminder</h2>
+
+        <p>${escapeHtml(greeting)},</p>
+
+        <p>This is a friendly reminder to RSVP for an upcoming ${eventTypeLabel.toLowerCase()} with <strong>${escapeHtml(data.teamName)}</strong>.</p>
+
+        <div style="background-color: #e3f2fd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1A1A1A;">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.eventTitle)}</h3>
+          <p style="margin: 10px 0;"><strong>Type:</strong> ${eventTypeLabel}</p>
+          <p style="margin: 10px 0;"><strong>Date & Time:</strong> ${data.eventDate}</p>
+          <p style="margin: 10px 0;"><strong>Location:</strong> ${escapeHtml(data.eventLocation)}</p>
+          ${data.opponent ? `<p style="margin: 10px 0;"><strong>Opponent:</strong> ${escapeHtml(data.opponent)}</p>` : ""}
+        </div>
+
+        <p>Your team is counting on you! Please let us know if you can make it.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${eventLink}"
+             style="background-color: #43A047; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            RSVP Now
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${eventLink}">${eventLink}</a>
+        </p>
+
+        <p style="color: #666; font-size: 14px; margin-top: 30px;">
+          This event is coming up in less than 48 hours.
+        </p>
+      </div>
+    `,
+    text: `RSVP Reminder
+
+${greeting},
+
+This is a friendly reminder to RSVP for an upcoming ${eventTypeLabel.toLowerCase()} with ${data.teamName}.
+
+${data.eventTitle}
+Type: ${eventTypeLabel}
+Date & Time: ${data.eventDate}
+Location: ${data.eventLocation}
+${data.opponent ? `Opponent: ${data.opponent}` : ""}
+
+Your team is counting on you! Please let us know if you can make it.
+
+RSVP at:
+${eventLink}
+
+This event is coming up in less than 48 hours.`,
+    to: [
+      {
+        email: data.email,
+      },
+    ],
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending RSVP reminder email:", error);
+    throw new Error("Failed to send RSVP reminder email");
+  }
+}
+
+/**
+ * Send RSVP reminders for events happening in 48 hours
+ * This function should be called by a scheduled job/cron
+ */
+export async function sendRSVPReminders(): Promise<void> {
+  // Calculate the time window: 48 hours from now (with a 1-hour buffer)
+  const now = new Date();
+  const fortyEightHoursFromNow = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+  const fortySevenHoursFromNow = new Date(now.getTime() + 47 * 60 * 60 * 1000);
+
+  // Find events happening in approximately 48 hours
+  const upcomingEvents = await prisma.event.findMany({
+    where: {
+      startAt: {
+        gte: fortySevenHoursFromNow,
+        lte: fortyEightHoursFromNow,
+      },
+    },
+    include: {
+      team: {
+        select: {
+          name: true,
+          leagueId: true,
+        },
+      },
+      rsvps: {
+        where: {
+          status: "NO_RESPONSE",
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Load every candidate's preference rows (global + per-league) so each
+  // reminder can be gated by the preference that applies to its event's league
+  // context. A league-scoped opt-out must not silence reminders for the user's
+  // other teams/leagues.
+  const userIds = [
+    ...new Set(upcomingEvents.flatMap((event) => event.rsvps.map((rsvp) => rsvp.user.id))),
+  ];
+  const prefRows = userIds.length > 0
+    ? await prisma.notificationPreference.findMany({
+        where: { userId: { in: userIds } },
+        select: { userId: true, leagueId: true, emailEnabled: true, rsvpReminders: true },
+      })
+    : [];
+  const prefsByUser = new Map<string, typeof prefRows>();
+  for (const row of prefRows) {
+    const list = prefsByUser.get(row.userId) ?? [];
+    list.push(row);
+    prefsByUser.set(row.userId, list);
+  }
+
+  // Send reminders for each event
+  for (const event of upcomingEvents) {
+    for (const rsvp of event.rsvps) {
+      const pref = pickPreference(prefsByUser.get(rsvp.user.id) ?? [], event.team.leagueId);
+      if (pref && (!pref.emailEnabled || !pref.rsvpReminders)) continue;
+      try {
+        await sendRSVPReminderEmail({
+          email: rsvp.user.email,
+          userName: rsvp.user.name,
+          teamName: event.team.name,
+          eventType: event.type,
+          eventTitle: event.title,
+          eventDate: formatDateTime(event.startAt),
+          eventLocation: event.location,
+          opponent: event.opponent,
+          eventId: event.id,
+        });
+      } catch (error) {
+        console.error(
+          `Failed to send RSVP reminder to ${rsvp.user.email} for event ${event.id}:`,
+          error
+        );
+        // Continue with other reminders even if one fails
+      }
+    }
+  }
+}
+
+/**
+ * Helper function to send event notifications to all team members
+ */
+export async function sendEventNotifications(
+  eventId: string,
+  type: "created" | "updated" | "cancelled"
+): Promise<void> {
+  // Fetch event with team members and their notification preferences
+  const event = await prisma.event.findUnique({
+    where: { id: eventId },
+    include: {
+      venue: { select: { name: true, address: true, city: true, state: true } },
+      team: {
+        include: {
+          members: {
+            include: {
+              user: {
+                select: {
+                  email: true,
+                  notificationPreferences: {
+                    select: {
+                      leagueId: true,
+                      eventNotifications: true,
+                      emailEnabled: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!event) {
+    throw new Error("Event not found");
+  }
+
+  // Filter team members by the preference that applies to this event's league
+  // context (league override if present, else global). A league-scoped opt-out
+  // does not suppress notifications for a member's other teams/leagues.
+  const eventLeagueId = event.team.leagueId;
+  const emails = event.team.members
+    .filter((member: { user: { notificationPreferences: Array<{ leagueId: string | null; eventNotifications: boolean; emailEnabled: boolean }> } }) => {
+      const pref = pickPreference(member.user.notificationPreferences, eventLeagueId);
+      // No applicable preference row → default to sending
+      if (!pref) return true;
+      return pref.eventNotifications && pref.emailEnabled;
+    })
+    .map((member: { user: { email: string } }) => member.user.email);
+
+  // No eligible recipients — skip sending to avoid Mailchimp 400 error
+  if (emails.length === 0) {
+    return;
+  }
+
+  // Build location string with venue address if available
+  let eventLocation = event.location;
+  if (event.venue) {
+    const parts = [event.venue.name, event.venue.address, event.venue.city, event.venue.state]
+      .filter(Boolean)
+      .join(", ");
+    if (parts) eventLocation = parts;
+  }
+
+  const eventData = {
+    emails,
+    teamName: event.team.name,
+    eventType: event.type,
+    eventTitle: event.title,
+    eventDate: formatDateTime(event.startAt),
+    eventLocation,
+    opponent: event.opponent,
+    eventId: event.id,
+  };
+
+  if (type === "created") {
+    await sendEventCreatedEmail(eventData);
+  } else if (type === "updated") {
+    await sendEventUpdatedEmail(eventData);
+  } else if (type === "cancelled") {
+    await sendEventCancelledEmail({
+      emails: eventData.emails,
+      teamName: eventData.teamName,
+      eventType: eventData.eventType,
+      eventTitle: eventData.eventTitle,
+      eventDate: eventData.eventDate,
+    });
+  }
+}
+
+interface LeagueMessageEmailData {
+  recipients: Array<{ email: string; name: string | null; userId?: string }>;
+  leagueName: string;
+  senderName: string;
+  subject: string;
+  content: string;
+  priority: string;
+  leagueId?: string;
+}
+
+/**
+ * Send a targeted league message email
+ */
+export async function sendLeagueMessageEmail(data: LeagueMessageEmailData): Promise<void> {
+  const priorityLabel = data.priority === "URGENT" ? "URGENT: " : data.priority === "HIGH" ? "Important: " : "";
+  const priorityColor = data.priority === "URGENT" ? "#D32F2F" : data.priority === "HIGH" ? "#FF9800" : "#1A1A1A";
+
+  // Batch generate unsubscribe tokens to avoid N+1 query problem
+  const userIds = data.recipients.filter(r => r.userId).map(r => r.userId!);
+  const tokenMap = userIds.length > 0
+    ? await notificationService.batchGenerateUnsubscribeTokens(userIds, data.leagueId)
+    : new Map<string, string>();
+
+  // Send individual emails to include personalized unsubscribe links
+  for (const recipient of data.recipients) {
+    let unsubscribeLink = "";
+
+    // Get pre-generated unsubscribe token
+    if (recipient.userId && tokenMap.has(recipient.userId)) {
+      const token = tokenMap.get(recipient.userId)!;
+      unsubscribeLink = `${BASE_URL}/unsubscribe?token=${token}`;
+    }
+
+    const message: EmailMessage = {
+      subject: `${priorityLabel}${data.subject}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: ${priorityColor}; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+            <h2 style="margin: 0; color: white;">League Message</h2>
+            <p style="margin: 10px 0 0 0; color: white; opacity: 0.9;">From ${escapeHtml(data.senderName)} • ${escapeHtml(data.leagueName)}</p>
+          </div>
+
+          <div style="background-color: #f5f5f5; padding: 20px; border-radius: 0 0 8px 8px;">
+            <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.subject)}</h3>
+
+            <div style="background-color: white; padding: 20px; border-radius: 4px; margin: 20px 0;">
+              ${escapeHtml(data.content).replace(/\n/g, '<br>')}
+            </div>
+
+            ${data.priority === "URGENT" || data.priority === "HIGH" ? `
+              <div style="background-color: #fff3e0; border-left: 4px solid ${priorityColor}; padding: 15px; margin: 20px 0;">
+                <strong style="color: ${priorityColor};">
+                  ${data.priority === "URGENT" ? "⚠️ This is an urgent message" : "📢 This is a high priority message"}
+                </strong>
+              </div>
+            ` : ""}
+
+            <p style="margin: 30px 0;">
+              <a href="${BASE_URL}/login"
+                 style="background-color: ${priorityColor}; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+                Go to Spartan
+              </a>
+            </p>
+
+            <p style="color: #666; font-size: 14px;">
+              Or copy and paste this link into your browser:<br>
+              <a href="${BASE_URL}/login">${BASE_URL}/login</a>
+            </p>
+
+            ${unsubscribeLink ? `
+              <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+              <p style="color: #999; font-size: 12px; text-align: center;">
+                Don't want to receive these emails?
+                <a href="${unsubscribeLink}" style="color: #999;">Unsubscribe</a>
+              </p>
+            ` : ""}
+          </div>
+        </div>
+      `,
+      text: `League Message from ${data.senderName}
+${data.leagueName}
+
+${data.subject}
+
+${data.content}
+
+${data.priority === "URGENT" || data.priority === "HIGH" ? `\n⚠️ This is a ${data.priority.toLowerCase()} priority message\n` : ""}
+
+Go to Spartan: ${BASE_URL}/login
+
+${unsubscribeLink ? `\nDon't want to receive these emails? Unsubscribe: ${unsubscribeLink}` : ""}`,
+      to: [{
+        email: recipient.email,
+        name: recipient.name || undefined,
+      }],
+    };
+
+    try {
+      await sendEmail(message);
+    } catch (error) {
+      console.error(`Error sending league message email to ${recipient.email}:`, error);
+      // Continue with other recipients
+    }
+  }
+}
+
+interface LeagueAnnouncementEmailData {
+  recipients: Array<{ email: string; name: string | null; userId?: string }>;
+  leagueName: string;
+  senderName: string;
+  subject: string;
+  content: string;
+  priority: string;
+  leagueId?: string;
+}
+
+/**
+ * Send a league announcement email
+ */
+export async function sendLeagueAnnouncementEmail(data: LeagueAnnouncementEmailData): Promise<void> {
+  const priorityLabel = data.priority === "URGENT" ? "URGENT: " : data.priority === "HIGH" ? "Important: " : "";
+  const priorityColor = data.priority === "URGENT" ? "#D32F2F" : data.priority === "HIGH" ? "#FF9800" : "#43A047";
+
+  // Batch generate unsubscribe tokens to avoid N+1 query problem
+  const userIds = data.recipients.filter(r => r.userId).map(r => r.userId!);
+  const tokenMap = userIds.length > 0
+    ? await notificationService.batchGenerateUnsubscribeTokens(userIds, data.leagueId)
+    : new Map<string, string>();
+
+  // Send individual emails to include personalized unsubscribe links
+  for (const recipient of data.recipients) {
+    let unsubscribeLink = "";
+
+    // Get pre-generated unsubscribe token
+    if (recipient.userId && tokenMap.has(recipient.userId)) {
+      const token = tokenMap.get(recipient.userId)!;
+      unsubscribeLink = `${BASE_URL}/unsubscribe?token=${token}`;
+    }
+
+    const message: EmailMessage = {
+      subject: `${priorityLabel}${data.subject}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background-color: ${priorityColor}; color: white; padding: 20px; border-radius: 8px 8px 0 0;">
+            <h2 style="margin: 0; color: white;">📢 League Announcement</h2>
+            <p style="margin: 10px 0 0 0; color: white; opacity: 0.9;">From ${escapeHtml(data.senderName)} • ${escapeHtml(data.leagueName)}</p>
+          </div>
+
+          <div style="background-color: #f5f5f5; padding: 20px; border-radius: 0 0 8px 8px;">
+            <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.subject)}</h3>
+
+            <div style="background-color: white; padding: 20px; border-radius: 4px; margin: 20px 0; border-left: 4px solid ${priorityColor};">
+              ${escapeHtml(data.content).replace(/\n/g, '<br>')}
+            </div>
+
+            ${data.priority === "URGENT" ? `
+              <div style="background-color: #ffebee; border: 2px solid #D32F2F; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <strong style="color: #D32F2F;">
+                  🚨 URGENT ANNOUNCEMENT - Please read immediately
+                </strong>
+              </div>
+            ` : data.priority === "HIGH" ? `
+              <div style="background-color: #fff3e0; border: 2px solid #FF9800; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                <strong style="color: #FF9800;">
+                  📢 Important announcement for all league members
+                </strong>
+              </div>
+            ` : ""}
+
+            <p style="margin: 30px 0;">
+              <a href="${BASE_URL}/login"
+                 style="background-color: ${priorityColor}; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+                Go to Spartan
+              </a>
+            </p>
+
+            <p style="color: #666; font-size: 14px;">
+              Or copy and paste this link into your browser:<br>
+              <a href="${BASE_URL}/login">${BASE_URL}/login</a>
+            </p>
+
+            ${unsubscribeLink ? `
+              <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+              <p style="color: #999; font-size: 12px; text-align: center;">
+                Don't want to receive these emails?
+                <a href="${unsubscribeLink}" style="color: #999;">Unsubscribe</a>
+              </p>
+            ` : ""}
+          </div>
+        </div>
+      `,
+      text: `📢 League Announcement from ${data.senderName}
+${data.leagueName}
+
+${data.subject}
+
+${data.content}
+
+${data.priority === "URGENT" ? "\n🚨 URGENT ANNOUNCEMENT - Please read immediately\n" : data.priority === "HIGH" ? "\n📢 Important announcement for all league members\n" : ""}
+
+Go to Spartan: ${BASE_URL}/login
+
+${unsubscribeLink ? `\nDon't want to receive these emails? Unsubscribe: ${unsubscribeLink}` : ""}`,
+      to: [{
+        email: recipient.email,
+        name: recipient.name || undefined,
+      }],
+    };
+
+    try {
+      await sendEmail(message);
+    } catch (error) {
+      console.error(`Error sending league announcement email to ${recipient.email}:`, error);
+      // Continue with other recipients
+    }
+  }
+}
+
+interface PracticePlanSharedEmailData {
+  emails: string[];
+  teamName: string;
+  sessionTitle: string;
+  sessionDate: string;
+  duration: number;
+  playCount: number;
+  sessionId: string;
+  teamId: string;
+}
+
+/**
+ * Send notification emails when a practice plan is shared
+ * Requirements: 6.1, 6.2
+ */
+export async function sendPracticePlanSharedEmail(data: PracticePlanSharedEmailData): Promise<void> {
+  const sessionLink = `${BASE_URL}/practice-planner/${data.sessionId}`;
+
+  const message: EmailMessage = {
+    subject: `Practice Plan Shared: ${data.sessionTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #1A1A1A;">New Practice Plan Available</h2>
+
+        <p>A new practice plan has been shared with <strong>${escapeHtml(data.teamName)}</strong>.</p>
+
+        <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.sessionTitle)}</h3>
+          <p style="margin: 10px 0;"><strong>Date:</strong> ${data.sessionDate}</p>
+          <p style="margin: 10px 0;"><strong>Duration:</strong> ${data.duration} minutes</p>
+          <p style="margin: 10px 0;"><strong>Number of Drills:</strong> ${data.playCount}</p>
+        </div>
+
+        <p>Review the practice plan to see the drills and prepare for the upcoming practice.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${sessionLink}"
+             style="background-color: #1A1A1A; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            View Practice Plan
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${sessionLink}">${sessionLink}</a>
+        </p>
+      </div>
+    `,
+    text: `New Practice Plan Available
+
+A new practice plan has been shared with ${data.teamName}.
+
+${data.sessionTitle}
+Date: ${data.sessionDate}
+Duration: ${data.duration} minutes
+Number of Drills: ${data.playCount}
+
+Review the practice plan to see the drills and prepare for the upcoming practice.
+
+View practice plan at:
+${sessionLink}`,
+    to: data.emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending practice plan shared email:", error);
+    throw new Error("Failed to send practice plan notification email");
+  }
+}
+
+interface PracticePlanUpdatedEmailData {
+  emails: string[];
+  teamName: string;
+  sessionTitle: string;
+  sessionDate: string;
+  duration: number;
+  playCount: number;
+  sessionId: string;
+  teamId: string;
+}
+
+/**
+ * Send notification emails when a shared practice plan is updated
+ * Requirements: 6.3
+ */
+export async function sendPracticePlanUpdatedEmail(data: PracticePlanUpdatedEmailData): Promise<void> {
+  const sessionLink = `${BASE_URL}/practice-planner/${data.sessionId}`;
+
+  const message: EmailMessage = {
+    subject: `Practice Plan Updated: ${data.sessionTitle}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #FF9800;">Practice Plan Updated</h2>
+
+        <p>A practice plan for <strong>${escapeHtml(data.teamName)}</strong> has been updated.</p>
+
+        <div style="background-color: #fff3e0; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #FF9800;">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(data.sessionTitle)}</h3>
+          <p style="margin: 10px 0;"><strong>Date:</strong> ${data.sessionDate}</p>
+          <p style="margin: 10px 0;"><strong>Duration:</strong> ${data.duration} minutes</p>
+          <p style="margin: 10px 0;"><strong>Number of Drills:</strong> ${data.playCount}</p>
+        </div>
+
+        <p>The practice plan has been modified. Please review the updated drills and instructions.</p>
+
+        <p style="margin: 30px 0;">
+          <a href="${sessionLink}"
+             style="background-color: #FF9800; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            View Updated Practice Plan
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${sessionLink}">${sessionLink}</a>
+        </p>
+      </div>
+    `,
+    text: `Practice Plan Updated
+
+A practice plan for ${data.teamName} has been updated.
+
+${data.sessionTitle}
+Date: ${data.sessionDate}
+Duration: ${data.duration} minutes
+Number of Drills: ${data.playCount}
+
+The practice plan has been modified. Please review the updated drills and instructions.
+
+View updated practice plan at:
+${sessionLink}`,
+    to: data.emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending practice plan updated email:", error);
+    throw new Error("Failed to send practice plan update notification email");
+  }
+}
+
+/**
+ * Helper function to send practice plan notifications to all team members
+ * Requirements: 6.1, 6.3, 6.4
+ */
+export async function sendPracticePlanNotifications(
+  sessionId: string,
+  teamId: string,
+  type: "shared" | "updated"
+): Promise<void> {
+  // Fetch session with team members and their notification preferences
+  const session = await prisma.practiceSession.findUnique({
+    where: { id: sessionId },
+    include: {
+      team: {
+        include: {
+          members: {
+            include: {
+              user: {
+                select: {
+                  id: true,
+                  email: true,
+                  notificationPreferences: {
+                    select: {
+                      leagueId: true,
+                      practicePlanNotifications: true,
+                      emailEnabled: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      _count: {
+        select: {
+          plays: true,
+        },
+      },
+    },
+  });
+
+  if (!session) {
+    throw new Error("Practice session not found");
+  }
+
+  // Filter members by the preference for this team's league context (league
+  // override else global); an unrelated league opt-out must not suppress here.
+  const teamLeagueId = session.team.leagueId;
+  const emails = session.team.members
+    .filter((member: { user: { notificationPreferences: Array<{ leagueId: string | null; practicePlanNotifications: boolean; emailEnabled: boolean }> } }) => {
+      const pref = pickPreference(member.user.notificationPreferences, teamLeagueId);
+      if (!pref) return true;
+      return pref.practicePlanNotifications && pref.emailEnabled;
+    })
+    .map((member: { user: { email: string } }) => member.user.email);
+
+  // No eligible recipients — skip sending to avoid Mailchimp 400 error
+  if (emails.length === 0) {
+    return;
+  }
+
+  const sessionData = {
+    emails,
+    teamName: session.team.name,
+    sessionTitle: session.title,
+    sessionDate: formatDateTime(session.date),
+    duration: session.duration,
+    playCount: session._count.plays,
+    sessionId: session.id,
+    teamId: session.teamId,
+  };
+
+  if (type === "shared") {
+    await sendPracticePlanSharedEmail(sessionData);
+  } else if (type === "updated") {
+    await sendPracticePlanUpdatedEmail(sessionData);
+  }
+}
+
+// --- Signup events (feature 004) ---
+
+interface SignupEventRecipient {
+  email: string;
+  name?: string | null;
+}
+
+interface SignupEventUpdatedEmailData {
+  recipients: SignupEventRecipient[];
+  eventTitle: string;
+  hostName: string;
+  changeSummary: string;
+  eventId: string;
+}
+
+/** Material-change notification (time/venue/details) to all active registrants. */
+export async function sendSignupEventUpdatedEmail(data: SignupEventUpdatedEmailData): Promise<void> {
+  if (data.recipients.length === 0) return;
+  const eventLink = `${BASE_URL}/signups/${data.eventId}`;
+
+  // One message per family — recipients must never see each other's addresses
+  // (same pattern as sendSignupEventReminders/sendLeagueMessageEmail).
+  for (const recipient of data.recipients) {
+    try {
+      await sendEmail({
+        subject: `Updated: ${data.eventTitle}`,
+        html: `<p><strong>${escapeHtml(data.eventTitle)}</strong> (hosted by ${escapeHtml(data.hostName)}) has been updated.</p><p>${escapeHtml(data.changeSummary)}</p><p><a href="${eventLink}">View the event</a></p>`,
+        text: `${data.eventTitle} (hosted by ${data.hostName}) has been updated. ${data.changeSummary} View: ${eventLink}`,
+        to: [{ email: recipient.email }]
+  });
+    } catch (emailError) {
+      console.error(`Failed to send event update email to ${recipient.email}:`, emailError);
+    }
+  }
+}
+
+interface SignupEventCanceledEmailData {
+  recipients: SignupEventRecipient[];
+  eventTitle: string;
+  hostName: string;
+  reason?: string;
+}
+
+/** Cancellation notice to all active registrants. */
+export async function sendSignupEventCanceledEmail(data: SignupEventCanceledEmailData): Promise<void> {
+  if (data.recipients.length === 0) return;
+  const reasonHtml = data.reason ? `<p>Reason: ${escapeHtml(data.reason)}</p>` : "";
+
+  // One message per family — recipients must never see each other's addresses.
+  for (const recipient of data.recipients) {
+    try {
+      await sendEmail({
+        subject: `Canceled: ${data.eventTitle}`,
+        html: `<p><strong>${escapeHtml(data.eventTitle)}</strong> (hosted by ${escapeHtml(data.hostName)}) has been canceled.</p>${reasonHtml}<p>If you paid online, the organizer will process refunds.</p>`,
+        text: `${data.eventTitle} (hosted by ${data.hostName}) has been canceled.${data.reason ? ` Reason: ${data.reason}` : ""} If you paid online, the organizer will process refunds.`,
+        to: [{ email: recipient.email }]
+  });
+    } catch (emailError) {
+      console.error(`Failed to send event cancellation email to ${recipient.email}:`, emailError);
+    }
+  }
+}
+
+interface EventRegistrationConfirmationEmailData {
+  to: string;
+  participantNames: string[];
+  eventTitle: string;
+  slotName: string;
+  hostName: string;
+  startAtFormatted: string;
+  eventId: string;
+  amountTotal: number;
+  currency: string;
+  manualPaymentNote?: string;
+}
+
+/** Registration confirmation to the registrant (contact of record). */
+export async function sendEventRegistrationConfirmationEmail(
+  data: EventRegistrationConfirmationEmailData
+): Promise<void> {
+  const eventLink = `${BASE_URL}/signups/${data.eventId}`;
+  const names = data.participantNames.join(", ");
+  const paymentHtml =
+    data.amountTotal > 0
+      ? `<p>Amount due: <strong>${formatMoney(data.amountTotal, data.currency)}</strong>${data.manualPaymentNote ? ` — ${escapeHtml(data.manualPaymentNote)}` : ""}</p>`
+      : "";
+
+  await sendEmail({
+    subject: `You're in: ${data.eventTitle}`,
+    html: `<p>${escapeHtml(names)} ${data.participantNames.length === 1 ? "is" : "are"} confirmed for <strong>${escapeHtml(data.slotName)}</strong> at <strong>${escapeHtml(data.eventTitle)}</strong> (hosted by ${escapeHtml(data.hostName)}) on ${data.startAtFormatted}.</p>${paymentHtml}<p><a href="${eventLink}">View the event</a></p>`,
+    text: `${names} confirmed for ${data.slotName} at ${data.eventTitle} (hosted by ${data.hostName}) on ${data.startAtFormatted}.${data.amountTotal > 0 ? ` Amount due: ${formatMoney(data.amountTotal, data.currency)}.` : ""} View: ${eventLink}`,
+    to: [{ email: data.to }]
+  });
+}
+
+interface EventRegistrationRemovedEmailData {
+  to: string;
+  participantName: string;
+  eventTitle: string;
+  reason?: string;
+}
+
+/** Notice that an organizer removed a registration. */
+export async function sendEventRegistrationRemovedEmail(
+  data: EventRegistrationRemovedEmailData
+): Promise<void> {
+
+  await sendEmail({
+    subject: `Registration removed: ${data.eventTitle}`,
+    html: `<p>${escapeHtml(data.participantName)}'s registration for <strong>${escapeHtml(data.eventTitle)}</strong> was removed by an organizer.</p>${data.reason ? `<p>Reason: ${escapeHtml(data.reason)}</p>` : ""}`,
+    text: `${data.participantName}'s registration for ${data.eventTitle} was removed by an organizer.${data.reason ? ` Reason: ${data.reason}` : ""}`,
+    to: [{ email: data.to }]
+  });
+}
+
+/**
+ * Send 48-hour reminders for upcoming signup events. Runs from the hourly
+ * reminders cron; the one-hour window means each event is picked up exactly
+ * once. Honors notification preferences (emailEnabled + rsvpReminders).
+ */
+export async function sendSignupEventReminders(): Promise<void> {
+  const windowStart = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  const windowEnd = new Date(Date.now() + 49 * 60 * 60 * 1000);
+
+  const events = await prisma.signupEvent.findMany({
+    where: {
+      status: "PUBLISHED",
+      startAt: { gte: windowStart, lt: windowEnd },
+    },
+    select: {
+      id: true,
+      title: true,
+      startAt: true,
+      locationText: true,
+      venue: { select: { name: true } },
+      hostOrganization: { select: { name: true } },
+      hostLeague: { select: { id: true, name: true } },
+      hostTeam: { select: { name: true } },
+      registrations: {
+        where: { status: "CONFIRMED" },
+        select: {
+          participantName: true,
+          registrant: { select: { id: true, email: true } },
+        },
+      },
+    },
+  });
+
+  for (const event of events) {
+    if (event.registrations.length === 0) continue;
+
+    // Exclude registrants who opted out of reminders for this event's host
+    // league context (league override else global); an unrelated league
+    // opt-out must not silence reminders for a different host.
+    const registrantIds = [...new Set(event.registrations.map((reg) => reg.registrant.id))];
+    const prefRows = await prisma.notificationPreference.findMany({
+      where: { userId: { in: registrantIds } },
+      select: { userId: true, leagueId: true, emailEnabled: true, rsvpReminders: true },
+    });
+    const prefsByUser = new Map<string, typeof prefRows>();
+    for (const row of prefRows) {
+      const list = prefsByUser.get(row.userId) ?? [];
+      list.push(row);
+      prefsByUser.set(row.userId, list);
+    }
+    const hostLeagueId = event.hostLeague?.id ?? null;
+
+    const byRegistrant = new Map<string, { email: string; participants: string[] }>();
+    for (const registration of event.registrations) {
+      const pref = pickPreference(prefsByUser.get(registration.registrant.id) ?? [], hostLeagueId);
+      if (pref && (!pref.emailEnabled || !pref.rsvpReminders)) continue;
+      const entry = byRegistrant.get(registration.registrant.id) ?? {
+        email: registration.registrant.email,
+        participants: [],
+      };
+      entry.participants.push(registration.participantName);
+      byRegistrant.set(registration.registrant.id, entry);
+    }
+    if (byRegistrant.size === 0) continue;
+
+    const hostName =
+      event.hostOrganization?.name ?? event.hostLeague?.name ?? event.hostTeam?.name ?? "the organizer";
+    const location = event.venue?.name ?? event.locationText ?? "";
+    const eventLink = `${BASE_URL}/signups/${event.id}`;
+
+    for (const { email, participants } of byRegistrant.values()) {
+      try {
+        await sendEmail({
+          subject: `Reminder: ${event.title} is coming up`,
+          html: `<p>Reminder — <strong>${escapeHtml(event.title)}</strong> (hosted by ${escapeHtml(hostName)}) starts ${formatDateTime(event.startAt)}${location ? ` at ${escapeHtml(location)}` : ""}.</p><p>Registered: ${escapeHtml(participants.join(", "))}</p><p><a href="${eventLink}">View the event</a></p>`,
+          text: `Reminder — ${event.title} (hosted by ${hostName}) starts ${formatDateTime(event.startAt)}${location ? ` at ${location}` : ""}. Registered: ${participants.join(", ")}. View: ${eventLink}`,
+          to: [{ email }]
+  });
+      } catch (emailError) {
+        console.error(`Failed to send signup-event reminder for ${event.id}:`, emailError);
+      }
+    }
+  }
+}
+
+interface WaitlistOfferEmailData {
+  to: string;
+  participantName: string;
+  eventTitle: string;
+  slotName: string;
+  claimByFormatted: string;
+  eventId: string;
+}
+
+/** A waitlist spot opened up — time-boxed offer to claim it. */
+export async function sendWaitlistOfferEmail(data: WaitlistOfferEmailData): Promise<void> {
+  const claimLink = `${BASE_URL}/my-registrations`;
+
+  await sendEmail({
+    subject: `A spot opened up: ${data.eventTitle}`,
+    html: `<p>Good news — a <strong>${escapeHtml(data.slotName)}</strong> spot opened up for ${escapeHtml(data.participantName)} at <strong>${escapeHtml(data.eventTitle)}</strong>.</p><p>Claim it by <strong>${data.claimByFormatted}</strong> or the offer passes to the next person on the waitlist.</p><p><a href="${claimLink}">Claim your spot</a></p>`,
+    text: `A ${data.slotName} spot opened up for ${data.participantName} at ${data.eventTitle}. Claim it by ${data.claimByFormatted} or the offer passes to the next person: ${claimLink}`,
+    to: [{ email: data.to }]
+  });
+}
+
+interface EventInvitationEmailData {
+  to: string;
+  eventTitle: string;
+  hostName: string;
+  startAtFormatted: string;
+  token: string;
+  isExistingUser: boolean;
+}
+
+/** Invitation to view/register for a signup event (access list for invite-only events). */
+export async function sendEventInvitationEmail(data: EventInvitationEmailData): Promise<void> {
+  const inviteLink = `${BASE_URL}/api/event-invitations/${data.token}`;
+  const cta = data.isExistingUser
+    ? "View the event and sign up"
+    : "Create your free account and sign up";
+
+  await sendEmail({
+    subject: `You're invited: ${data.eventTitle}`,
+    html: `<p>${escapeHtml(data.hostName)} invited you to <strong>${escapeHtml(data.eventTitle)}</strong> on ${data.startAtFormatted}.</p><p><a href="${inviteLink}">${cta}</a></p>`,
+    text: `${data.hostName} invited you to ${data.eventTitle} on ${data.startAtFormatted}. ${cta}: ${inviteLink}`,
+    to: [{ email: data.to }]
+  });
+}
+
+interface EventTeamsUpdateEmailData {
+  recipients: SignupEventRecipient[];
+  eventTitle: string;
+  eventId: string;
+  isInitialPublish: boolean;
+}
+
+/** Teams/rosters posted (or updated after posting) for a signup event. */
+export async function sendEventTeamsUpdateEmail(data: EventTeamsUpdateEmailData): Promise<void> {
+  if (data.recipients.length === 0) return;
+  const eventLink = `${BASE_URL}/signups/${data.eventId}`;
+  const headline = data.isInitialPublish
+    ? `Teams are posted for ${data.eventTitle}`
+    : `Team assignments updated for ${data.eventTitle}`;
+
+  // One message per family — recipients must never see each other's addresses.
+  for (const recipient of data.recipients) {
+    try {
+      await sendEmail({
+        subject: headline,
+        html: `<p>${escapeHtml(headline)}.</p><p><a href="${eventLink}">See your team and game times</a></p>`,
+        text: `${headline}. See your team and game times: ${eventLink}`,
+        to: [{ email: recipient.email }]
+  });
+    } catch (emailError) {
+      console.error(`Failed to send teams update email to ${recipient.email}:`, emailError);
+    }
+  }
+}
+
+// --- Season scheduling: game proposals (feature 005) ---
+
+type GameProposalChange = "created" | "countered" | "accepted" | "declined" | "withdrawn";
+
+/**
+ * Notify the side that did NOT act on a game-proposal state change
+ * (FR-020/023). Recipients are the counterparty team's ADMINs — for
+ * "created"/"countered" that is the side receiving the new terms; for
+ * "accepted"/"declined"/"withdrawn" it is the other side from the acting
+ * entry's actorTeamId. Respects NotificationPreference (emailEnabled +
+ * eventNotifications) the same way sendPracticePlanNotifications does.
+ */
+export async function sendGameProposalNotifications(
+  proposalId: string,
+  change: GameProposalChange
+): Promise<void> {
+  const proposal = await prisma.gameProposal.findUnique({
+    where: { id: proposalId },
+    include: {
+      proposingTeam: { select: { id: true, name: true } },
+      receivingTeam: { select: { id: true, name: true } },
+      entries: {
+        orderBy: { createdAt: "asc" },
+        include: { venue: { select: { name: true, timezone: true } } },
+      },
+    },
+  });
+
+  if (!proposal) {
+    throw new Error("Game proposal not found");
+  }
+
+  // The most recent entry records the action that triggered this
+  // notification; the other side is the one that must hear about it.
+  const lastEntry = proposal.entries[proposal.entries.length - 1];
+  if (!lastEntry) {
+    throw new Error("Game proposal has no entries");
+  }
+  const actingTeam =
+    lastEntry.actorTeamId === proposal.proposingTeam.id
+      ? proposal.proposingTeam
+      : proposal.receivingTeam;
+  const recipientTeam =
+    actingTeam.id === proposal.proposingTeam.id ? proposal.receivingTeam : proposal.proposingTeam;
+
+  // Current terms live on the latest PROPOSE/COUNTER entry; render its times
+  // in the venue's timezone when known, else the platform fallback.
+  const terms = [...proposal.entries]
+    .reverse()
+    .find((entry) => entry.kind === "PROPOSE" || entry.kind === "COUNTER");
+  const timezone = terms?.venue?.timezone || FALLBACK_TIME_ZONE;
+  const startFormatted = terms?.startAt ? formatDateTime(terms.startAt, timezone) : "To be determined";
+  const endFormatted = terms?.endAt ? formatDateTime(terms.endAt, timezone) : null;
+  const venueName = terms?.venue?.name || "To be determined";
+  const latestNote = [...proposal.entries].reverse().find((entry) => entry.note)?.note ?? null;
+
+  // Recipients: ADMINs of the non-acting side, filtered by notification
+  // preferences (no preferences set defaults to sending).
+  const admins = await prisma.teamMember.findMany({
+    where: { teamId: recipientTeam.id, role: "ADMIN" },
+    select: {
+      user: {
+        select: {
+          email: true,
+          notificationPreferences: {
+            select: {
+              leagueId: true,
+              eventNotifications: true,
+              emailEnabled: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Proposals are league-scoped; gate on the preference for this proposal's
+  // league (league override else global), not any unrelated league's row.
+  const emails = admins
+    .filter((member) => {
+      const pref = pickPreference(member.user.notificationPreferences, proposal.leagueId);
+      if (!pref) return true;
+      return pref.eventNotifications && pref.emailEnabled;
+    })
+    .map((member) => member.user.email);
+
+  // No eligible recipients — skip sending to avoid Mailchimp 400 error
+  if (emails.length === 0) {
+    return;
+  }
+
+  const matchup = `${proposal.proposingTeam.name} vs ${proposal.receivingTeam.name}`;
+  const proposalsLink = `${BASE_URL}/seasons/proposals`;
+
+  const subjects: Record<GameProposalChange, string> = {
+    created: `New game proposal from ${actingTeam.name}`,
+    countered: `${actingTeam.name} countered your game proposal`,
+    accepted: `${actingTeam.name} accepted your game proposal`,
+    declined: `${actingTeam.name} declined your game proposal`,
+    withdrawn: `${actingTeam.name} withdrew the game proposal`,
+  };
+  const headlines: Record<GameProposalChange, string> = {
+    created: "New Game Proposal",
+    countered: "Game Proposal Countered",
+    accepted: "Game Proposal Accepted",
+    declined: "Game Proposal Declined",
+    withdrawn: "Game Proposal Withdrawn",
+  };
+  const leads: Record<GameProposalChange, string> = {
+    created: `${actingTeam.name} has proposed a game with ${recipientTeam.name}.`,
+    countered: `${actingTeam.name} has counter-proposed new terms for your game proposal.`,
+    accepted: `${actingTeam.name} has accepted the game proposal. The game has been added to the schedule.`,
+    declined: `${actingTeam.name} has declined the game proposal.`,
+    withdrawn: `${actingTeam.name} has withdrawn the game proposal.`,
+  };
+  const colors: Record<GameProposalChange, string> = {
+    created: "#1A1A1A",
+    countered: "#FF9800",
+    accepted: "#43A047",
+    declined: "#D32F2F",
+    withdrawn: "#D32F2F",
+  };
+  const color = colors[change];
+
+  const message: EmailMessage = {
+    subject: subjects[change],
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: ${color};">${headlines[change]}</h2>
+
+        <p>${escapeHtml(leads[change])}</p>
+
+        <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid ${color};">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(matchup)}</h3>
+          <p style="margin: 10px 0;"><strong>Start:</strong> ${startFormatted}</p>
+          ${endFormatted ? `<p style="margin: 10px 0;"><strong>End:</strong> ${endFormatted}</p>` : ""}
+          <p style="margin: 10px 0;"><strong>Venue:</strong> ${escapeHtml(venueName)}</p>
+          ${latestNote ? `<p style="margin: 10px 0;"><strong>Note:</strong> ${escapeHtml(latestNote)}</p>` : ""}
+        </div>
+
+        <p style="margin: 30px 0;">
+          <a href="${proposalsLink}"
+             style="background-color: ${color}; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Review Proposal
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${proposalsLink}">${proposalsLink}</a>
+        </p>
+      </div>
+    `,
+    text: `${headlines[change]}
+
+${leads[change]}
+
+${matchup}
+Start: ${startFormatted}
+${endFormatted ? `End: ${endFormatted}` : ""}
+Venue: ${venueName}
+${latestNote ? `Note: ${latestNote}` : ""}
+
+Review the proposal at:
+${proposalsLink}`,
+    to: emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending game proposal notification email:", error);
+    throw new Error("Failed to send game proposal notification email");
+  }
+}
+
+/** Transitions on an operational instruction/request thread. */
+export type LeagueThreadChange =
+  | "instruction_issued"
+  | "team_replied"
+  | "admin_replied"
+  | "request_raised"
+  | "resolved"
+  | "closed";
+
+/**
+ * Notify the side that did not act on an operational thread.
+ *
+ * Direction depends on the transition: association-side actions reach the
+ * admins of the teams involved, while team-side actions reach the league
+ * admins. Callers invoke this fire-and-forget — a mail failure must never
+ * roll back the recorded thread state.
+ */
+export async function sendLeagueThreadNotifications(
+  threadId: string,
+  change: LeagueThreadChange
+): Promise<void> {
+  const thread = await prisma.leagueThread.findUnique({
+    where: { id: threadId },
+    include: {
+      league: { select: { id: true, name: true } },
+      originTeam: { select: { id: true, name: true } },
+      targets: { select: { team: { select: { id: true, name: true } } } },
+      entries: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { body: true, actorTeam: { select: { name: true } } },
+      },
+    },
+  });
+
+  if (!thread) {
+    throw new Error("League thread not found");
+  }
+
+  // Team-originated changes are answered by the association; everything else
+  // flows outward to the teams on the thread.
+  const notifiesLeagueAdmins = change === "team_replied" || change === "request_raised";
+
+  const preferenceSelect = {
+    leagueId: true,
+    operationalThreadNotifications: true,
+    emailEnabled: true,
+  } as const;
+
+  let emails: string[];
+
+  if (notifiesLeagueAdmins) {
+    const admins = await prisma.leagueUser.findMany({
+      where: { leagueId: thread.leagueId, role: "LEAGUE_ADMIN" },
+      select: {
+        user: {
+          select: {
+            email: true,
+            notificationPreferences: { select: preferenceSelect },
+          },
+        },
+      },
+    });
+
+    emails = admins
+      .filter((member) => {
+        const pref = pickPreference(member.user.notificationPreferences, thread.leagueId);
+        if (!pref) return true;
+        return pref.operationalThreadNotifications && pref.emailEnabled;
+      })
+      .map((member) => member.user.email);
+  } else {
+    // An instruction reaches its targeted teams; a request's updates go back
+    // to the team that raised it.
+    const teamIds = thread.originTeam
+      ? [thread.originTeam.id]
+      : thread.targets.map((target) => target.team.id);
+
+    if (teamIds.length === 0) return;
+
+    const admins = await prisma.teamMember.findMany({
+      where: { teamId: { in: teamIds }, role: "ADMIN" },
+      select: {
+        user: {
+          select: {
+            email: true,
+            notificationPreferences: { select: preferenceSelect },
+          },
+        },
+      },
+    });
+
+    emails = admins
+      .filter((member) => {
+        const pref = pickPreference(member.user.notificationPreferences, thread.leagueId);
+        if (!pref) return true;
+        return pref.operationalThreadNotifications && pref.emailEnabled;
+      })
+      .map((member) => member.user.email);
+  }
+
+  // De-duplicate: one person may administer several targeted teams.
+  emails = [...new Set(emails)];
+
+  if (emails.length === 0) {
+    return;
+  }
+
+  const actorName = thread.entries[0]?.actorTeam?.name ?? thread.league.name;
+  const latestBody = thread.entries[0]?.body ?? thread.body;
+  const threadLink = `${BASE_URL}/league/${thread.leagueId}/threads/${thread.id}`;
+
+  const subjects: Record<LeagueThreadChange, string> = {
+    instruction_issued: `Action required: ${thread.subject}`,
+    team_replied: `${actorName} responded: ${thread.subject}`,
+    admin_replied: `${thread.league.name} replied: ${thread.subject}`,
+    request_raised: `New request from ${thread.originTeam?.name ?? "a team"}: ${thread.subject}`,
+    resolved: `Resolved: ${thread.subject}`,
+    closed: `Closed: ${thread.subject}`,
+  };
+  const headlines: Record<LeagueThreadChange, string> = {
+    instruction_issued: "New Instruction",
+    team_replied: "Team Response",
+    admin_replied: "Association Reply",
+    request_raised: "New Team Request",
+    resolved: "Thread Resolved",
+    closed: "Thread Closed",
+  };
+  const leads: Record<LeagueThreadChange, string> = {
+    instruction_issued: thread.requiresResponse
+      ? `${thread.league.name} has issued an instruction that needs a response from your team.`
+      : `${thread.league.name} has issued an instruction for your team.`,
+    team_replied: `${actorName} has responded on this thread.`,
+    admin_replied: `${thread.league.name} has replied on this thread.`,
+    request_raised: `${thread.originTeam?.name ?? "A team"} has raised a request with ${thread.league.name}.`,
+    resolved: `This thread has been marked resolved by ${thread.league.name}.`,
+    closed: `This thread has been closed by ${thread.league.name}.`,
+  };
+  const colors: Record<LeagueThreadChange, string> = {
+    instruction_issued: "#1A1A1A",
+    team_replied: "#1A1A1A",
+    admin_replied: "#1A1A1A",
+    request_raised: "#FF9800",
+    resolved: "#43A047",
+    closed: "#616161",
+  };
+  const color = colors[change];
+
+  const message: EmailMessage = {
+    subject: subjects[change],
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: ${color};">${headlines[change]}</h2>
+
+        <p>${escapeHtml(leads[change])}</p>
+
+        <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid ${color};">
+          <h3 style="margin-top: 0; color: #333;">${escapeHtml(thread.subject)}</h3>
+          <p style="margin: 10px 0; white-space: pre-wrap;">${escapeHtml(latestBody)}</p>
+        </div>
+
+        <p style="margin: 30px 0;">
+          <a href="${threadLink}"
+             style="background-color: ${color}; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">
+            Open Thread
+          </a>
+        </p>
+
+        <p style="color: #666; font-size: 14px;">
+          Or copy and paste this link into your browser:<br>
+          <a href="${threadLink}">${threadLink}</a>
+        </p>
+      </div>
+    `,
+    text: `${headlines[change]}
+
+${leads[change]}
+
+${thread.subject}
+
+${latestBody}
+
+Open the thread at:
+${threadLink}`,
+    to: emails.map((email) => ({ email })),
+  };
+
+  try {
+    await sendEmail(message);
+  } catch (error) {
+    console.error("Error sending league thread notification email:", error);
+    throw new Error("Failed to send league thread notification email");
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Volunteer reminders.
+//
+// Both are queued through NotificationOutbox and delivered by
+// lib/services/volunteer-outbox-worker.ts, so a shift reminder survives a
+// provider outage rather than being lost between the cron tick and the send.
+// ---------------------------------------------------------------------------
+
+interface VolunteerShiftReminderEmailData {
+  to: string;
+  roleLabel: string;
+  postLabel: string | null;
+  /** ISO instant; rendered in `timezone`, which is the venue-local reading. */
+  startAt: string;
+  timezone: string;
+}
+
+export async function sendVolunteerShiftReminderEmail(
+  data: VolunteerShiftReminderEmailData,
+): Promise<void> {
+  const when = formatDateTime(new Date(data.startAt), data.timezone || FALLBACK_TIME_ZONE);
+  const where = data.postLabel ? ` at ${data.postLabel}` : "";
+  const link = `${BASE_URL}/dashboard`;
+
+  await sendEmail({
+    subject: `Reminder: ${data.roleLabel} on ${when}`,
+    html: `<p>You are signed up for <strong>${escapeHtml(data.roleLabel)}</strong>${escapeHtml(where)}.</p>
+      <p>${escapeHtml(when)} (${escapeHtml(data.timezone)})</p>
+      <p><a href="${link}">View your shifts</a></p>
+      <p>If you can no longer make it, stand down from the shift so somebody on the waiting list can take it.</p>`,
+    text: `You are signed up for ${data.roleLabel}${where}.
+${when} (${data.timezone})
+
+View your shifts: ${link}
+
+If you can no longer make it, stand down from the shift so somebody on the waiting list can take it.`,
+    to: [{ email: data.to }],
+  });
+}
+
+interface VolunteerShortageEmailData {
+  to: string;
+  roleLabel: string;
+  postLabel: string | null;
+  shortfall: number;
+  capacity: number;
+  startAt: string;
+  timezone: string;
+}
+
+export async function sendVolunteerShortageEmail(
+  data: VolunteerShortageEmailData,
+): Promise<void> {
+  const when = formatDateTime(new Date(data.startAt), data.timezone || FALLBACK_TIME_ZONE);
+  const where = data.postLabel ? ` (${data.postLabel})` : "";
+  const people = data.shortfall === 1 ? "1 volunteer" : `${data.shortfall} volunteers`;
+  const link = `${BASE_URL}/dashboard`;
+
+  await sendEmail({
+    subject: `Still short ${people}: ${data.roleLabel} on ${when}`,
+    html: `<p><strong>${escapeHtml(data.roleLabel)}</strong>${escapeHtml(where)} on ${escapeHtml(when)} still needs ${escapeHtml(people)} of ${data.capacity}.</p>
+      <p><a href="${link}">Open the workforce board</a></p>`,
+    text: `${data.roleLabel}${where} on ${when} still needs ${people} of ${data.capacity}.
+
+Open the workforce board: ${link}`,
+    to: [{ email: data.to }],
+  });
+}

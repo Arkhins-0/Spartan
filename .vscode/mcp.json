@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "adrkit": {
+      "type": "stdio",
+      "command": "${workspaceFolder}/node_modules/.bin/adrkit-mcp",
+      "args": ["--cwd", "${workspaceFolder}", "--dir", "docs/adr"]
+    }
+  }
+}

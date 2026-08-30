@@ -1,0 +1,106 @@
+"use client";
+
+import { type FormEvent, useMemo, useState, useTransition } from "react";
+import { Alert, Button, Card, CardActions, CardContent, CardHeader, Stack, TextField } from "@mui/material";
+import { DateTimeField } from "@/components/ui/date";
+import { submitIceTimeRequest } from "@/lib/actions/venue-requests";
+import {
+  formatDateTimeLocalInput,
+  parseDateTimeLocalToUtc,
+  resolveTimeZone,
+} from "@/lib/utils/date";
+
+interface IceTimeRequestFormProps {
+  anchorId?: string;
+  scheduleBlockId: string;
+  venueId: string;
+  venueName: string;
+  startsAt: Date | string;
+  endsAt: Date | string;
+  /** The venue's IANA timezone; requested times are interpreted against it. */
+  timezone?: string;
+}
+
+type FormMessage = { severity: "success" | "error"; text: string };
+
+export function IceTimeRequestForm({ anchorId, scheduleBlockId, venueId, venueName, startsAt, endsAt, timezone }: IceTimeRequestFormProps) {
+  const [message, setMessage] = useState<FormMessage | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const tz = useMemo(() => resolveTimeZone(timezone), [timezone]);
+  const defaultStartAt = useMemo(() => formatDateTimeLocalInput(startsAt, tz), [startsAt, tz]);
+  const defaultEndAt = useMemo(() => formatDateTimeLocalInput(endsAt, tz), [endsAt, tz]);
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const optionalString = (name: string) => {
+      const value = String(formData.get(name) ?? "").trim();
+      return value.length > 0 ? value : undefined;
+    };
+
+    const requestedStartAt = parseDateTimeLocalToUtc(String(formData.get("requestedStartAt") ?? ""), tz);
+    const requestedEndAt = parseDateTimeLocalToUtc(String(formData.get("requestedEndAt") ?? ""), tz);
+    if (!requestedStartAt || !requestedEndAt) {
+      setMessage({ severity: "error", text: "Enter a valid requested start and end time." });
+      return;
+    }
+
+    startTransition(async () => {
+      setMessage(null);
+      const result = await submitIceTimeRequest({
+        scheduleBlockId,
+        venueId,
+        requesterOrganizationName: optionalString("requesterOrganizationName"),
+        contactName: String(formData.get("contactName") ?? ""),
+        contactEmail: String(formData.get("contactEmail") ?? ""),
+        contactPhone: optionalString("contactPhone"),
+        requestedStartAt,
+        requestedEndAt,
+        notes: optionalString("notes"),
+      });
+
+      if (result.success) {
+        setMessage({ severity: "success", text: "Ice time request submitted." });
+        form.reset();
+        return;
+      }
+
+      setMessage({ severity: "error", text: result.error });
+    });
+  };
+
+  return (
+    <Card id={anchorId ?? `request-${scheduleBlockId}`} component="form" onSubmit={handleSubmit} sx={{ maxWidth: 560 }}>
+      <CardHeader title="Request ice time" subheader={`Requesting ice at ${venueName}`} />
+      <CardContent>
+        <Stack spacing={2}>
+          {message ? <Alert severity={message.severity}>{message.text}</Alert> : null}
+          <TextField label="Requester organization" name="requesterOrganizationName" autoComplete="organization" />
+          <TextField label="Contact name" name="contactName" required />
+          <TextField label="Contact email" name="contactEmail" type="email" required />
+          <TextField label="Contact phone" name="contactPhone" type="tel" autoComplete="tel" />
+          <DateTimeField
+            label="Requested start"
+            name="requestedStartAt"
+            required
+            defaultValue={defaultStartAt}
+          />
+          <DateTimeField
+            label="Requested end"
+            name="requestedEndAt"
+            required
+            defaultValue={defaultEndAt}
+            helperText={`Times are in ${tz}`}
+          />
+          <TextField label="Notes" name="notes" multiline minRows={3} />
+        </Stack>
+      </CardContent>
+      <CardActions sx={{ justifyContent: "flex-end" }}>
+        <Button type="submit" variant="contained" disabled={isPending}>
+          {isPending ? "Submitting…" : "Submit request"}
+        </Button>
+      </CardActions>
+    </Card>
+  );
+}

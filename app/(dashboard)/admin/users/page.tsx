@@ -1,0 +1,62 @@
+import { Suspense } from "react";
+import { notFound } from "next/navigation";
+import { Typography, Box, CircularProgress } from "@mui/material";
+import { PageContainer } from "@/components/ui/PageContainer";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { isPlatformAdmin, requireUserId } from "@/lib/auth/session";
+import { getAllUsers } from "@/lib/actions/admin";
+import UserApprovalList from "@/components/features/admin/UserApprovalList";
+
+async function UserManagementContent() {
+  const userId = await requireUserId();
+
+  // Gate on the real platform-admin role (matches requireSystemAdmin used by
+  // the admin actions). Previously this used isAnyLeagueAdmin, which was
+  // self-grantable by creating a league.
+  const isAdmin = await isPlatformAdmin(userId);
+
+  if (!isAdmin) {
+    // 404 rather than a visible "Access Denied", matching /admin and
+    // /admin/audit: a distinct denial page confirms the route exists to
+    // anyone probing for it.
+    notFound();
+  }
+
+  const result = await getAllUsers();
+
+  if (result.error || !result.data) {
+    return (
+      <PageContainer>
+        <PageHeader title="Error" />
+        <Typography variant="body1">
+          {result.error || "Failed to load users"}
+        </Typography>
+      </PageContainer>
+    );
+  }
+
+  const users = result.data;
+
+  return (
+    <PageContainer>
+      <PageHeader title="User Management" subtitle="Approve or reject user accounts" />
+      <UserApprovalList users={users} />
+    </PageContainer>
+  );
+}
+
+export default function UserManagementPage() {
+  return (
+    <Suspense
+      fallback={
+        <PageContainer>
+          <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "50vh" }}>
+            <CircularProgress />
+          </Box>
+        </PageContainer>
+      }
+    >
+      <UserManagementContent />
+    </Suspense>
+  );
+}
