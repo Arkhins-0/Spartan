@@ -1,5 +1,7 @@
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DOCS_URL } from '@/lib/config/constants';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_AUTH_ALLOWED_HOSTS,
@@ -105,19 +107,16 @@ describe('deployment configuration', () => {
     expect(columnRepair).not.toContain('ADD VALUE IF NOT EXISTS');
   });
 
-  it('publishes documentation to GitHub Pages with the custom domain artifact', async () => {
-    const docsWorkflow = await readText('.github/workflows/docs-pages.yml');
-    const docsBuilder = await readText('scripts/build-docs-pages.ts');
+  it('serves documentation from the app at /docs rather than a separate Pages site', async () => {
+    const packageJson = await readJson<{ scripts?: Record<string, string> }>('package.json');
 
-    expect(docsWorkflow).toContain('bun run docs:build-pages');
-    expect(docsWorkflow).toContain('actions/configure-pages');
-    expect(docsWorkflow).toContain('actions/upload-pages-artifact');
-    expect(docsWorkflow).toContain('actions/deploy-pages');
-    expect(docsBuilder).toContain('docs.spartan.arkhins.com');
-    expect(docsBuilder).toContain('CNAME');
+    expect(existsSync(path.join(rootDir, 'app/docs/page.tsx'))).toBe(true);
+    expect(existsSync(path.join(rootDir, '.github/workflows/docs-pages.yml'))).toBe(false);
+    expect(packageJson.scripts?.['docs:build-pages']).toBeUndefined();
+    expect(DOCS_URL).toBe('https://spartan.arkhins.com/docs');
   });
 
-  it('runs scheduled uptime monitoring for the main and docs sites', async () => {
+  it('runs scheduled uptime monitoring for the main site', async () => {
     const packageJson = await readJson<{ scripts?: Record<string, string> }>('package.json');
     const deploymentChecksWorkflow = await readText('.github/workflows/deployment-checks.yml');
     const uptimeWorkflow = await readText('.github/workflows/uptime-monitoring.yml');
@@ -135,20 +134,19 @@ describe('deployment configuration', () => {
     expect(uptimeWorkflow).toContain('/api/health');
     expect(DEFAULT_UPTIME_TARGETS).toEqual([
       { name: 'main', url: 'https://spartan.arkhins.com' },
-      { name: 'docs', url: 'https://docs.spartan.arkhins.com' },
     ]);
   });
 });
 
 describe('uptime checker', () => {
-  it('uses the production main and docs sites by default', () => {
+  it('uses the production site by default', () => {
     expect(parseUptimeTargets('')).toEqual(DEFAULT_UPTIME_TARGETS);
   });
 
   it('parses named target overrides', () => {
-    expect(parseUptimeTargets('main=https://spartan.arkhins.com,docs=https://docs.spartan.arkhins.com/status')).toEqual([
+    expect(parseUptimeTargets('main=https://spartan.arkhins.com,docs=https://spartan.arkhins.com/docs')).toEqual([
       { name: 'main', url: 'https://spartan.arkhins.com' },
-      { name: 'docs', url: 'https://docs.spartan.arkhins.com/status' },
+      { name: 'docs', url: 'https://spartan.arkhins.com/docs' },
     ]);
   });
 
@@ -271,7 +269,7 @@ describe('uptime checker', () => {
       throw new Error('network unavailable');
     }) as unknown as typeof fetch;
 
-    const [result] = await checkUptimeTargets([{ name: 'docs', url: 'https://docs.spartan.arkhins.com' }], {
+    const [result] = await checkUptimeTargets([{ name: 'docs', url: 'https://spartan.arkhins.com/docs' }], {
       fetcher,
       timeoutMs: 1_000,
     });

@@ -115,19 +115,7 @@ gh pr merge --merge  # Auto-release triggers on merge
     - ⚠️ Version unchanged
     - ❌ Invalid version bump (fails CI)
 
-### 4. Documentation Pages Workflow
-
-**File**: `.github/workflows/docs-pages.yml`
-
-**Process**:
-
-1. Triggered by documentation changes on `main` or manual dispatch
-2. Installs dependencies with Bun using the lockfile
-3. Runs `bun run docs:build-pages`
-4. Uploads `dist/docs-pages` as a GitHub Pages artifact
-5. Deploys the artifact through GitHub Pages
-
-### 5. Deployment Checks Workflow
+### 4. Deployment Checks Workflow
 
 **File**: `.github/workflows/deployment-checks.yml`
 

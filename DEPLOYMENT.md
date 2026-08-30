@@ -192,25 +192,13 @@ catches up on its next run. If you move to a Vercel plan with unrestricted
 Cron, you can instead add the same schedules to `vercel.json` under `crons` and
 disable the workflow.
 
-## GitHub Pages Documentation Deployment
+## Documentation
 
-The repository includes `.github/workflows/docs-pages.yml` to publish a static documentation site to GitHub Pages.
-
-### Repository-local setup
-
-- `bun run docs:build-pages` renders `app/docs` MDX content plus repository reference docs from `docs/` into `dist/docs-pages`.
-- The generated artifact includes `.nojekyll`, `sitemap.xml`, and `CNAME`.
-- The default docs domain is `docs.spartan.arkhins.com`; override with `DOCS_PAGES_DOMAIN` if the domain changes.
-
-### GitHub configuration required
-
-1. In **Settings** → **Pages**, set **Build and deployment** to **GitHub Actions**.
-2. Add or verify the `docs.spartan.arkhins.com` custom domain.
-3. Configure DNS records with the domain registrar.
-4. Enable and verify HTTPS after DNS propagation.
-5. Run the **Documentation Pages** workflow manually once, then rely on automatic deploys when docs change on `main`.
-
-These account, DNS, SSL, and Pages settings cannot be completed from repository code alone.
+Documentation is part of the application itself: the MDX content under
+`app/docs/` is served by the Vercel deployment at
+`https://spartan.arkhins.com/docs`. There is no separate documentation site,
+GitHub Pages deployment, or `docs.` subdomain to configure — it ships with
+every production deploy.
 
 ## Deployment Tests
 
@@ -228,9 +216,9 @@ bun run build
 
 The `.github/workflows/deployment-checks.yml` workflow runs the deployment readiness check on relevant pull requests and `main` changes.
 
-The `.github/workflows/uptime-monitoring.yml` workflow runs every 30 minutes and on demand. It executes `bun run uptime:check`, which checks the production app (`https://spartan.arkhins.com`), documentation site (`https://docs.spartan.arkhins.com`), and protected app readiness endpoint (`https://spartan.arkhins.com/api/health`). Manual runs can override targets with `UPTIME_CHECK_URLS`-style comma-separated URLs or `name=url` pairs.
+The `.github/workflows/uptime-monitoring.yml` workflow runs every 30 minutes and on demand. It executes `bun run uptime:check`, which checks the production app (`https://spartan.arkhins.com`), the in-app documentation (`https://spartan.arkhins.com/docs`), and the protected app readiness endpoint (`https://spartan.arkhins.com/api/health`). Manual runs can override targets with `UPTIME_CHECK_URLS`-style comma-separated URLs or `name=url` pairs.
 
-Set `UPTIME_CHECK_TOKEN` as both a Vercel environment variable and a GitHub Actions secret. The workflow marks only the `health` target as authenticated via `UPTIME_CHECK_AUTH_TARGETS=health`, and `UPTIME_CHECK_AUTH_ALLOWED_HOSTS=spartan.arkhins.com,docs.spartan.arkhins.com` prevents the token from being sent to public pages or arbitrary manual URLs.
+Set `UPTIME_CHECK_TOKEN` as both a Vercel environment variable and a GitHub Actions secret. The workflow marks only the `health` target as authenticated via `UPTIME_CHECK_AUTH_TARGETS=health`, and `UPTIME_CHECK_AUTH_ALLOWED_HOSTS=spartan.arkhins.com` prevents the token from being sent to public pages or arbitrary manual URLs.
 
 ## Alternative Deployment Options
 
@@ -346,7 +334,7 @@ docker run -p 3000:3000 --env-file .env.production spartan
 - **Vercel Function Logs**: Runtime logs and errors
 - **Neon Dashboard**: Database performance and connections
 - **Mailchimp Reports**: Email delivery and engagement
-- **GitHub Actions uptime checks**: Scheduled checks for `https://spartan.arkhins.com`, `https://docs.spartan.arkhins.com`, and the token-protected `https://spartan.arkhins.com/api/health`; workflow failures provide maintainer notifications through GitHub.
+- **GitHub Actions uptime checks**: Scheduled checks for `https://spartan.arkhins.com`, `https://spartan.arkhins.com/docs`, and the token-protected `https://spartan.arkhins.com/api/health`; workflow failures provide maintainer notifications through GitHub.
 
 ### Recommended Additional Monitoring
 

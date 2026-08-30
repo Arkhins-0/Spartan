@@ -23,7 +23,7 @@ export interface UptimeCheckOptions {
 }
 
 export const DEFAULT_UPTIME_TIMEOUT_MS = 10_000;
-export const DEFAULT_AUTH_ALLOWED_HOSTS = new Set(['spartan.arkhins.com', 'docs.spartan.arkhins.com']);
+export const DEFAULT_AUTH_ALLOWED_HOSTS = new Set(['spartan.arkhins.com']);
 export const UPTIME_CHECK_ENV_NAMES = {
   authAllowedHosts: 'UPTIME_CHECK_AUTH_ALLOWED_HOSTS',
   authTargetNames: 'UPTIME_CHECK_AUTH_TARGETS',
@@ -34,7 +34,6 @@ export const UPTIME_CHECK_ENV_NAMES = {
 
 export const DEFAULT_UPTIME_TARGETS: UptimeTarget[] = [
   { name: 'main', url: 'https://spartan.arkhins.com' },
-  { name: 'docs', url: 'https://docs.spartan.arkhins.com' },
 ];
 
 function normalizeTargetName(value: string, index: number): string {

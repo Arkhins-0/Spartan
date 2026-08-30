@@ -40,9 +40,9 @@ jobs:
 
       - name: Run uptime checks
         env:
-          UPTIME_CHECK_URLS: ${{ inputs.target_urls || 'main=https://spartan.arkhins.com,docs=https://docs.spartan.arkhins.com,health=https://spartan.arkhins.com/api/health' }}
+          UPTIME_CHECK_URLS: ${{ inputs.target_urls || 'main=https://spartan.arkhins.com,docs=https://spartan.arkhins.com/docs,health=https://spartan.arkhins.com/api/health' }}
           UPTIME_CHECK_AUTH_TARGETS: health
-          UPTIME_CHECK_AUTH_ALLOWED_HOSTS: spartan.arkhins.com,docs.spartan.arkhins.com
+          UPTIME_CHECK_AUTH_ALLOWED_HOSTS: spartan.arkhins.com
           UPTIME_CHECK_TOKEN: ${{ secrets.UPTIME_CHECK_TOKEN }}
           UPTIME_CHECK_TIMEOUT_MS: '10000'
         run: bun run uptime:check

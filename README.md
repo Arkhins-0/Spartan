@@ -782,7 +782,7 @@ Spartan's *documentation* is licensed under the
 (CC BY 4.0) - see [LICENSE-DOCS](./LICENSE-DOCS) for full details.
 
 This covers the published documentation prose - exactly the files that build
-[docs.spartan.arkhins.com](https://docs.spartan.arkhins.com):
+[spartan.arkhins.com/docs](https://spartan.arkhins.com/docs):
 
 - `docs/*.md` - top-level repository documentation
 - `app/docs/**/*.mdx` - the MDX documentation content
@@ -824,7 +824,7 @@ A professionally hosted version is live at [spartan.arkhins.com](https://spartan
 
 The free team plan is a commitment, not a trial. Paid tiers exist only for leagues and clubs (multi-team orgs), and revenue comes from those org-level plans and opt-in local sponsorships clubs choose — never from charging teams or serving third-party ads.
 
-📚 **Developer Documentation:** [docs.spartan.arkhins.com](https://docs.spartan.arkhins.com)
+📚 **Developer Documentation:** [spartan.arkhins.com/docs](https://spartan.arkhins.com/docs)
 
 #### 2. **Self-Hosting (For Technical Teams)**
 

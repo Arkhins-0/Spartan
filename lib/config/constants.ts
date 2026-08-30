@@ -36,7 +36,7 @@ export const DEVELOPER_URL = "https://arkhins.com";
 /**
  * External links
  */
-export const DOCS_URL = "https://docs.spartan.arkhins.com";
+export const DOCS_URL = "https://spartan.arkhins.com/docs";
 export const GITHUB_URL = "https://github.com/Arkhins-0/Spartan";
 export const INSTAGRAM_URL = "https://instagram.com/arkhins";
 export const LINKEDIN_URL = "https://linkedin.com/in/krishna-vijay";

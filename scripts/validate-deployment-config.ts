@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_DOCS_PAGES_DOMAIN, DOCS_PAGES_DOMAIN_ENV } from './build-docs-pages';
 import { DEFAULT_AUTH_ALLOWED_HOSTS, DEFAULT_UPTIME_TARGETS, UPTIME_CHECK_ENV_NAMES } from './check-uptime';
 
 interface VercelConfig {
@@ -38,7 +37,7 @@ const REQUIRED_BUN_RUNTIME_SCRIPTS: Record<string, string> = {
   start: 'bun --bun next start',
 };
 
-const REQUIRED_GENERAL_SCRIPTS = ['type-check', 'lint', 'test', 'validate-env', 'docs:build-pages', 'uptime:check'];
+const REQUIRED_GENERAL_SCRIPTS = ['type-check', 'lint', 'test', 'validate-env', 'uptime:check'];
 
 async function readJson<T>(rootDir: string, relativePath: string): Promise<T> {
   return JSON.parse(await readFile(path.join(rootDir, relativePath), 'utf8')) as T;
@@ -80,10 +79,6 @@ function hasHeaderValue(vercel: VercelConfig, key: string, valueSnippet: string)
   return Boolean(vercel.headers?.some((group) => group.headers?.some((header) => (
     header.key?.toLowerCase() === key.toLowerCase() && header.value?.includes(valueSnippet)
   ))));
-}
-
-function workflowUsesPinnedAction(workflow: string, actionName: string): boolean {
-  return new RegExp(`uses:\\s+${actionName}@[a-f0-9]{40}\\b`, 'u').test(workflow);
 }
 
 function includesAll(value: string, snippets: string[]): boolean {
@@ -178,54 +173,35 @@ export async function validateDeploymentConfig(rootDir = process.cwd()): Promise
     requireCondition(failures, envExample.includes(`${envName}=`), `.env.example must document ${envName}.`);
   }
 
-  for (const envName of ['SPARTAN_RUN_MIGRATIONS_ON_BUILD', DOCS_PAGES_DOMAIN_ENV, ...Object.values(UPTIME_CHECK_ENV_NAMES)]) {
+  for (const envName of ['SPARTAN_RUN_MIGRATIONS_ON_BUILD', ...Object.values(UPTIME_CHECK_ENV_NAMES)]) {
     requireCondition(failures, envExample.includes(envName), `.env.example must document optional ${envName}.`);
   }
 
-  const docsWorkflowPath = path.join(rootDir, '.github', 'workflows', 'docs-pages.yml');
+  // Documentation is served by the app itself at /docs (app/docs); there is no
+  // separate GitHub Pages site or docs.* domain to validate.
   const deploymentChecksWorkflowPath = path.join(rootDir, '.github', 'workflows', 'deployment-checks.yml');
   const uptimeWorkflowPath = path.join(rootDir, '.github', 'workflows', 'uptime-monitoring.yml');
   const releaseWorkflowPath = path.join(rootDir, '.github', 'workflows', 'release.yml');
   const tagReleaseWorkflowPath = path.join(rootDir, '.github', 'workflows', 'tag-release.yml');
-  const docsBuildScriptPath = path.join(rootDir, 'scripts', 'build-docs-pages.ts');
   const uptimeCheckScriptPath = path.join(rootDir, 'scripts', 'check-uptime.ts');
   const healthRoutePath = path.join(rootDir, 'app', 'api', 'health', 'route.ts');
   const proxyPath = path.join(rootDir, 'proxy.ts');
 
   requireCondition(failures, existsSync(deploymentChecksWorkflowPath), 'Deployment checks workflow is required.');
-  requireCondition(failures, existsSync(docsWorkflowPath), 'GitHub Pages docs workflow is required.');
   requireCondition(failures, existsSync(releaseWorkflowPath), 'Release workflow is required.');
   requireCondition(failures, existsSync(tagReleaseWorkflowPath), 'Tag release workflow is required.');
-  requireCondition(failures, existsSync(docsBuildScriptPath), 'Documentation Pages build script is required.');
   requireCondition(failures, existsSync(uptimeWorkflowPath), 'Scheduled uptime monitoring workflow is required.');
   requireCondition(failures, existsSync(uptimeCheckScriptPath), 'Uptime monitoring check script is required.');
   requireCondition(failures, existsSync(healthRoutePath), 'Protected application health endpoint is required.');
   requireCondition(failures, existsSync(proxyPath), 'Next.js proxy.ts is required for security headers, HTTPS enforcement, and rate limiting.');
 
-  for (const workflowPath of [docsWorkflowPath, deploymentChecksWorkflowPath, uptimeWorkflowPath, releaseWorkflowPath, tagReleaseWorkflowPath]) {
+  for (const workflowPath of [deploymentChecksWorkflowPath, uptimeWorkflowPath, releaseWorkflowPath, tagReleaseWorkflowPath]) {
     if (existsSync(workflowPath)) {
       const workflow = await readFile(workflowPath, 'utf8');
       requireCondition(
         failures,
         hasCiDatabaseUrlFallback(workflow),
         `${path.relative(rootDir, workflowPath)} must provide DATABASE_URL during install so Prisma postinstall generation works in CI.`,
-      );
-    }
-  }
-
-  if (existsSync(docsWorkflowPath)) {
-    const docsWorkflow = await readFile(docsWorkflowPath, 'utf8');
-    requireCondition(
-      failures,
-      includesAll(docsWorkflow, ['actions/configure-pages', 'actions/upload-pages-artifact', 'actions/deploy-pages', 'bun run docs:build-pages']),
-      'GitHub Pages workflow must build, upload, and deploy the documentation artifact.',
-    );
-
-    for (const actionName of ['actions/configure-pages', 'actions/upload-pages-artifact', 'actions/deploy-pages']) {
-      requireCondition(
-        failures,
-        workflowUsesPinnedAction(docsWorkflow, actionName),
-        `GitHub Pages workflow must pin ${actionName} to an immutable commit SHA.`,
       );
     }
   }
@@ -249,12 +225,6 @@ export async function validateDeploymentConfig(rootDir = process.cwd()): Promise
     );
   }
 
-  if (existsSync(docsBuildScriptPath)) {
-    const docsBuildScript = await readFile(docsBuildScriptPath, 'utf8');
-    requireCondition(failures, DEFAULT_DOCS_PAGES_DOMAIN === 'docs.spartan.arkhins.com', 'Documentation build script must configure the docs.spartan.arkhins.com custom domain.');
-    requireCondition(failures, docsBuildScript.includes('CNAME'), 'Documentation build script must emit a CNAME file for GitHub Pages.');
-  }
-
   if (existsSync(uptimeWorkflowPath)) {
     const uptimeWorkflow = await readFile(uptimeWorkflowPath, 'utf8');
     requireCondition(
@@ -267,11 +237,9 @@ export async function validateDeploymentConfig(rootDir = process.cwd()): Promise
   requireCondition(
     failures,
     DEFAULT_UPTIME_TARGETS.some((target) => target.url === 'https://spartan.arkhins.com')
-      && DEFAULT_UPTIME_TARGETS.some((target) => target.url === 'https://docs.spartan.arkhins.com')
       && DEFAULT_AUTH_ALLOWED_HOSTS.has('spartan.arkhins.com')
-      && DEFAULT_AUTH_ALLOWED_HOSTS.has('docs.spartan.arkhins.com')
       && Object.values(UPTIME_CHECK_ENV_NAMES).includes('UPTIME_CHECK_TOKEN'),
-    'Uptime monitoring script must default to public domains and support scoped authenticated checks.',
+    'Uptime monitoring script must default to the public domain and support scoped authenticated checks.',
   );
 
   if (existsSync(healthRoutePath)) {
