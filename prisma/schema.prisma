@@ -1,0 +1,4130 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// User model
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String
+  name            String?
+  approved        Boolean   @default(true) // Moderation kill-switch: false = suspended (signup gate is email verification)
+  emailVerified   DateTime? // Set when the user proves inbox ownership (verification link, invite match, or password reset)
+  isPlatformAdmin Boolean   @default(false) // Platform-wide admin (user approval/enumeration). NOT self-grantable; see lib/auth/session.ts isPlatformAdmin()
+  sessionVersion  Int       @default(0) // Bumped on password reset/change + email change to evict existing JWT sessions; checked in the auth jwt callback
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  verificationTokens           VerificationToken[]
+  teamMembers                  TeamMember[]
+  rsvps                        RSVP[]
+  invitations                  Invitation[]
+  players                      Player[]
+  playerGuardians              PlayerGuardian[]
+  teamOfficials                TeamOfficial[]
+  leagueUsers                  LeagueUser[]
+  playerTransfers              PlayerTransfer[]
+  sentMessages                 LeagueMessage[]
+  messageRecipients            MessageRecipient[]
+  notificationPreferences      NotificationPreference[]
+  notificationBatches          NotificationBatch[]
+  auditLogs                    AuditLog[]
+  venues                       Venue[]
+  createdSeasons               Season[]                     @relation("SeasonCreator")
+  createdSeasonGames           SeasonGame[]                 @relation("SeasonGameCreator")
+  seasonGameConflictOverrides  SeasonGame[]                 @relation("SeasonGameConflictOverride")
+  eventGameConflictOverrides   EventGame[]                  @relation("EventGameConflictOverride")
+  eventConflictOverrides       Event[]                      @relation("EventConflictOverride")
+  createdGameProposals         GameProposal[]               @relation("GameProposalCreator")
+  gameProposalEntries          GameProposalEntry[]          @relation("GameProposalActor")
+  placementDecisions           PlacementDecision[]          @relation("PlacementDecider")
+  seasonTeamPlacements         SeasonTeamPlacement[]        @relation("SeasonPlacementActor")
+  createdVenueOrganizations    VenueOrganization[]          @relation("VenueOrganizationCreator")
+  venueStaffMemberships        VenueStaff[]                 @relation("VenueStaffUser")
+  sentVenueStaffInvites        VenueStaff[]                 @relation("VenueStaffInviter")
+  createdVenueScheduleBlocks   VenueScheduleBlock[]         @relation("VenueScheduleBlockCreator")
+  updatedVenueScheduleBlocks   VenueScheduleBlock[]         @relation("VenueScheduleBlockUpdater")
+  surfaceTimeRequests              SurfaceTimeRequest[]             @relation("SurfaceTimeRequester")
+  decidedSurfaceTimeRequests       SurfaceTimeRequest[]             @relation("SurfaceTimeDecider")
+  venueContentPosts            VenueContentPost[]           @relation("VenueContentAuthor")
+  sentVenueRelationshipInvites VenueRelationship[]          @relation("VenueRelationshipInviter")
+  acceptedVenueRelationships   VenueRelationship[]          @relation("VenueRelationshipAccepter")
+  removedVenueRelationships    VenueRelationship[]          @relation("VenueRelationshipRemover")
+  venueActivityLogs            VenueActivityLog[]           @relation("VenueActivityActor")
+  sessionRegistrations         SessionRegistration[]        @relation("SessionRegistrant")
+  canceledSessionRegistrations SessionRegistration[]        @relation("SessionRegistrationCanceler")
+  createdSignupEvents          SignupEvent[]                @relation("SignupEventCreator")
+  updatedSignupEvents          SignupEvent[]                @relation("SignupEventUpdater")
+  eventRegistrations           EventRegistration[]          @relation("EventRegistrant")
+  canceledEventRegistrations   EventRegistration[]          @relation("EventRegistrationCanceler")
+  eventCheckIns                EventRegistration[]          @relation("EventCheckInActor")
+  markedManualPayments         EventRegistration[]          @relation("ManualPaymentMarker")
+  eventInvitationsReceived     EventInvitation[]            @relation("EventInvitee")
+  eventInvitationsSent         EventInvitation[]            @relation("EventInviter")
+  eventManagerRoles            EventManager[]               @relation("EventManagerUser")
+  grantedEventManagerRoles     EventManager[]               @relation("EventManagerGrantor")
+  eventTeamAssignmentsMade     EventTeamAssignment[]        @relation("EventTeamAssigner")
+  uploadedEventMedia           EventMediaItem[]             @relation("EventMediaUploader")
+  removedEventMedia            EventMediaItem[]             @relation("EventMediaRemover")
+  grantedParentalConsents      ParentalConsent[]            @relation("ParentalConsentGrantor")
+  createdGearNeeds             TeamGearNeed[]               @relation("GearNeedCreator")
+  requestedGearReservations    GearReservation[]            @relation("GearReservationRequester")
+  decidedGearReservations      GearReservation[]            @relation("GearReservationDecider")
+  gearAllocations              GearAllocation[]             @relation("GearAllocationAllocator")
+  handledGearHandoffs          GearHandoff[]                @relation("GearHandoffHandler")
+  recordedGearMovements        GearInventoryMovement[]      @relation("GearMovementRecorder")
+  gearActivity                 GearActivity[]               @relation("GearActivityActor")
+  notificationOutbox           NotificationOutbox[]         @relation("NotificationOutboxRecipient")
+  createdVenueReservations     VenueReservation[]           @relation("VenueReservationCreator")
+  assignedVenueReservations    VenueReservation[]           @relation("VenueReservationAssigner")
+  venueReservationTransitions  VenueReservationTransition[] @relation("VenueReservationTransitionActor")
+  venueReservationOverrides    VenueReservationOverride[]   @relation("VenueReservationOverrideActor")
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants        AssociationRoleGrant[] @relation("AssociationRoleGrantSubject")
+  associationRoleGrantsGranted AssociationRoleGrant[] @relation("AssociationRoleGrantGrantor")
+  associationRoleGrantsRevoked AssociationRoleGrant[] @relation("AssociationRoleGrantRevoker")
+  volunteerNeedsCreated        VolunteerNeed[]        @relation("VolunteerNeedCreator")
+  volunteerAssignments         VolunteerAssignment[]  @relation("VolunteerAssignmentSubject")
+  volunteerAssignmentsAssigned VolunteerAssignment[]  @relation("VolunteerAssignmentAssigner")
+
+  // Feature 007 US4 — public profiles and content.
+  publicContentItems  PublicContentItem[] @relation("PublicContentAuthor")
+
+  // Operational instruction/request threads.
+  leagueThreadsCreated  LeagueThread[]      @relation("LeagueThreadCreator")
+  leagueThreadsResolved LeagueThread[]      @relation("LeagueThreadResolver")
+  leagueThreadEntries   LeagueThreadEntry[] @relation("LeagueThreadActor")
+
+  // Championship rounds and results.
+  createdRaceRounds     RaceRound[]   @relation("RaceRoundCreator")
+  recordedRaceResults   RaceResult[]  @relation("RaceResultRecorder")
+  createdRaceSessions   RaceSession[] @relation("RaceSessionCreator")
+  registeredRaceEntries RaceEntry[]   @relation("RaceEntryRegistrar")
+
+  volunteerCredentials         VolunteerCredential[] @relation("VolunteerCredentialHolder")
+  verifiedVolunteerCredentials VolunteerCredential[] @relation("VolunteerCredentialVerifier")
+  recordedVolunteerCredentials VolunteerCredential[] @relation("VolunteerCredentialRecorder")
+  waivedVolunteerCredentials   VolunteerAssignment[] @relation("VolunteerAssignmentCredentialWaiver")
+  authoredRoundWaivers         RoundWaiver[]         @relation("RoundWaiverAuthor")
+  roundWaiverAcceptances       RoundWaiverAcceptance[] @relation("RoundWaiverAcceptor")
+
+  // Official association paperwork.
+  uploadedDocuments Document[] @relation("DocumentUploader")
+  removedDocuments  Document[] @relation("DocumentRemover")
+}
+
+// Single-use, hashed account-lifecycle tokens (email verification, password
+// reset, email change). Only the SHA-256 hash is stored; the raw value exists
+// solely in the emailed link. See lib/auth/tokens.ts.
+model VerificationToken {
+  id        String                @id @default(cuid())
+  tokenHash String                @unique
+  type      VerificationTokenType
+  newEmail  String? // EMAIL_CHANGE target address, applied on confirmation
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime              @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+enum VerificationTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  EMAIL_CHANGE
+}
+
+// Durable fixed-window rate-limit counters for Server Actions, which POST to
+// page URLs and therefore bypass the in-memory /api/* limiter in proxy.ts.
+// One row per (key, window), incremented atomically via upsert. See
+// lib/utils/durable-rate-limit.ts.
+model RateLimitBucket {
+  key         String // scope + identifier, e.g. "signup:ip:1.2.3.4"
+  windowStart DateTime // request time truncated to the window boundary
+  count       Int      @default(1)
+  expiresAt   DateTime // windowStart + window; drives opportunistic cleanup
+
+  @@id([key, windowStart])
+  @@index([expiresAt])
+  @@map("rate_limit_buckets")
+}
+
+// Audit log model for tracking administrative actions and security events
+model AuditLog {
+  id           String   @id @default(cuid())
+  action       String // AuditAction enum value
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leagueId     String?
+  league       League?  @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  teamId       String?
+  team         Team?    @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  resourceId   String? // ID of the affected resource
+  resourceType String? // Type of the affected resource (team, player, event, etc.)
+  details      Json? // Additional details about the action
+  ipAddress    String? // IP address of the user
+  userAgent    String? // User agent string
+  severity     String   @default("info") // info, warning, error
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([leagueId])
+  @@index([teamId])
+  @@index([action])
+  @@index([createdAt])
+  @@index([severity])
+}
+
+// Spartan is a motorsport-only platform (ADR-0012). The enum is kept as a
+// single-value column so sport-aware code paths keep a stable, typed key.
+enum Sport {
+  MOTORSPORT
+}
+
+// Team model
+model Team {
+  id        String   @id @default(cuid())
+  // Feature 007 US4 — publishable team profile. The slug is unique per
+  // association, not globally: two associations may both have a "storm".
+  slug              String?
+  publicDescription String?
+  logoUrl           String?
+  profileStatus     PublicProfileStatus @default(DRAFT)
+  publishedAt       DateTime?
+  name      String
+  sport     Sport    @default(MOTORSPORT)
+  season    String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Optional league relationship for backward compatibility
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+
+  divisionId String?
+  division   Division? @relation(fields: [divisionId], references: [id])
+
+  members            TeamMember[]
+  players            Player[]
+  officials          TeamOfficial[]
+  events             Event[]
+  invitations        Invitation[]
+  homeEvents         Event[]                  @relation("HomeTeam")
+  awayEvents         Event[]                  @relation("AwayTeam")
+  transfersFrom      PlayerTransfer[]         @relation("TransferFromTeam")
+  transfersTo        PlayerTransfer[]         @relation("TransferToTeam")
+  messageTargeting   MessageTargeting[]
+  messages           LeagueMessage[]
+  auditLogs          AuditLog[]
+  venues             Venue[]
+  seasons            Season[]
+  homeSeasonGames    SeasonGame[]             @relation("SeasonGameHome")
+  awaySeasonGames    SeasonGame[]             @relation("SeasonGameAway")
+  proposalsSent      GameProposal[]           @relation("ProposalsSent")
+  proposalsReceived  GameProposal[]           @relation("ProposalsReceived")
+  placementDecisions PlacementDecision[]
+  seasonPlacements   SeasonTeamPlacement[]
+  venueRelationships VenueRelationship[]
+  surfaceTimeRequests    SurfaceTimeRequest[]
+  hostedSignupEvents SignupEvent[]
+  signupPhases       EventRegistrationPhase[] @relation("PhaseTeams")
+  gearNeeds          TeamGearNeed[]
+  gearNeedCommands   TeamGearNeedCommand[]
+  gearReservations   GearReservation[]
+  venueReservations  VenueReservation[]       @relation("VenueReservationTeamOwner")
+
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants AssociationRoleGrant[]
+  volunteerNeeds        VolunteerNeed[]
+
+  // Operational instruction/request threads.
+  threadsOriginated  LeagueThread[]           @relation("LeagueThreadOrigin")
+  threadStatuses     LeagueThreadTeamStatus[]
+  threadEntries      LeagueThreadEntry[]
+
+  // Championship rounds and results.
+  raceResults RaceResult[]
+  raceEntries RaceEntry[]
+
+  // Official association paperwork.
+  documents Document[]
+
+  // Feature 007 US4 — public profiles and content.
+  publicSlugRedirects PublicSlugRedirect[]
+  publicContentItems  PublicContentItem[]
+  @@unique([leagueId, id])
+  @@index([leagueId]) // Optimize league-team queries
+  @@index([divisionId]) // Optimize division-team queries
+}
+
+// TeamMember junction table with role
+model TeamMember {
+  id       String   @id @default(cuid())
+  role     Role     @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+
+  @@unique([userId, teamId])
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+// Team official taxonomy (coaches, managers, treasurers, volunteers).
+// Descriptive only — permissions stay on TeamMember.role; granting team admin
+// access is an explicit, separate step (decision D4).
+model TeamOfficial {
+  id         String             @id @default(cuid())
+  name       String
+  email      String?
+  role       TeamOfficialRole
+  roleDetail String? // App-level validation requires this when role is OTHER
+  status     TeamOfficialStatus @default(ACTIVE)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  userId String? // Linked when the email matches a User (at create or invitation acceptance)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Postgres treats NULLs as distinct, so email-less entries never collide here
+  @@unique([teamId, email, role])
+  @@index([teamId])
+  @@index([userId])
+  @@map("team_officials")
+}
+
+enum TeamOfficialRole {
+  HEAD_COACH
+  ASSISTANT_COACH
+  MANAGER
+  TREASURER
+  VOLUNTEER_COORDINATOR
+  PARENT_VOLUNTEER
+  OTHER
+}
+
+enum TeamOfficialStatus {
+  ACTIVE
+  INVITED
+  REMOVED
+}
+
+// Player model (roster information)
+// NOTE: Player represents roster entries for team members who may or may not have user accounts.
+// - Players can exist without User accounts (e.g., youth players whose parents manage RSVPs)
+// - When a Player accepts an invitation and creates an account, they become linked via TeamMember
+// - TeamMember connects authenticated Users to Teams with roles (ADMIN/MEMBER)
+// - A single person can exist as both a Player (roster entry) and have a User account (TeamMember)
+// - In MVP: Keep Player for roster display, use TeamMember.userId for RSVP and auth operations
+model Player {
+  id               String    @id @default(cuid())
+  name             String
+  email            String?
+  phone            String?
+  emergencyContact String? // Admin-only field, not visible to regular members
+  emergencyPhone   String? // Admin-only field, not visible to regular members
+  jerseyNumber     Int? // Optional jersey number (1–99). No unique constraint; duplicates trigger warning only.
+  position         String? // Free-text role (e.g., Driver, Co-driver, Mechanic, Team Manager).
+  // Motorsport roster fields. Typed columns rather than a JSON blob so they
+  // stay type-safe, queryable, and individually validatable.
+  fmsciLicenseNumber String? @db.VarChar(30) // FMSCI competition licence number. Admin-only.
+  carNumber          Int? // Competition car number. No unique constraint; duplicates trigger a warning only, as jerseyNumber does.
+  racingClass        String? @db.VarChar(50) // Free-text class/category (e.g. Formula LGB4, Saloon Class B).
+  dateOfBirth      DateTime? @db.Date // Admin-only, like emergencyContact. COPPA: under-13 requires an active ParentalConsent row.
+  userId           String? // Optional link to User account if player has registered
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Optional league relationship for league-wide roster management
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+
+  // Transfer history
+  transfers PlayerTransfer[]
+
+  eventRegistrations EventRegistration[]
+  guardians          PlayerGuardian[]
+  rsvps              RSVP[]
+  parentalConsents   ParentalConsent[]
+  raceResults        RaceResult[]
+  raceEntries RaceEntry[]
+
+  @@index([leagueId]) // Optimize league-wide roster queries
+  @@index([userId]) // Optimize "my roster entries" lookups
+}
+
+// Guardian edge: a User who manages a roster Player (parent/guardian household
+// link). Identity graph (Tier 3) — User remains the hub; this is an edge, not
+// a Person refactor. Guardians with canRsvp answer per child via RSVP.playerId.
+model PlayerGuardian {
+  id           String   @id @default(cuid())
+  relationship String? // Display-only free text (e.g. "Mother", "Guardian")
+  canRsvp      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, userId])
+  @@index([userId])
+  @@map("player_guardians")
+}
+
+// COPPA parental-consent audit record for players under 13. One row per grant;
+// revocation sets revokedAt (never delete) so the audit trail survives.
+// The consent record must outlive BOTH the granting account and the child's
+// roster entry, so playerId and grantedByUserId are both nullable + SetNull.
+// A denormalized snapshot of the child (name, DOB, team) is captured at
+// consent-write time so a detached row (playerId → null) stays auditable.
+model ParentalConsent {
+  id             String    @id @default(cuid())
+  method         String // How consent was captured (e.g. "ACCOUNT_ATTESTATION")
+  consentVersion String // Which consent-language version was agreed to (counsel-versioned)
+  grantedAt      DateTime  @default(now())
+  revokedAt      DateTime?
+
+  // Denormalized child snapshot at consent-capture time. Retention-preserving:
+  // these outlive Player deletion so the audit record identifies who consent
+  // covered even after playerId is nulled out.
+  childName        String? // Player.name at capture time
+  childDateOfBirth DateTime? @db.Date // Player.dateOfBirth at capture time
+  teamId           String? // Player.teamId at capture time (plain snapshot, not an FK)
+
+  // Nullable + SetNull (mirrors grantedByUserId): deleting the child's roster
+  // entry must NOT destroy the consent/revocation audit trail.
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  grantedByUserId String?
+  grantedBy       User?   @relation("ParentalConsentGrantor", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([playerId])
+  @@map("parental_consents")
+}
+
+// Event model
+model Event {
+  id        String    @id @default(cuid())
+  type      EventType
+  title     String
+  startAt   DateTime // Combined date and time stored in UTC for proper timezone handling
+  endAt     DateTime? // Optional end time for duration tracking and track time scheduling
+  // IANA timezone the organizer entered the wall-clock times in. The venue's
+  // zone (or the organizer's local zone) is chosen in application logic on
+  // create/update; this DB default is only a fallback for rows written without
+  // an explicit zone.
+  timezone  String    @default("America/New_York")
+  location  String
+  opponent  String?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  // Optional venue relationship (structured location)
+  venueId String?
+  venue   Venue?  @relation(fields: [venueId], references: [id], onDelete: SetNull)
+
+  // Optional league relationship for league-wide scheduling
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  // Multi-team game support
+  homeTeamId String?
+  homeTeam   Team?   @relation("HomeTeam", fields: [homeTeamId], references: [id])
+
+  awayTeamId String?
+  awayTeam   Team?   @relation("AwayTeam", fields: [awayTeamId], references: [id])
+
+  // Recorded venue-conflict override (unified availability, feature 006)
+  conflictOverriddenById String?
+  conflictOverriddenBy   User?     @relation("EventConflictOverride", fields: [conflictOverriddenById], references: [id], onDelete: SetNull)
+  conflictOverriddenAt   DateTime?
+
+  rsvps      RSVP[]
+  seasonGame SeasonGame?
+
+  venueReservationId String?           @unique
+  venueReservation   VenueReservation? @relation(fields: [venueReservationId], references: [id], onDelete: SetNull)
+
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants AssociationRoleGrant[]
+  volunteerNeeds        VolunteerNeed[]
+  invitationGrants      Invitation[]          @relation("InvitationAssociationEvent")
+  @@index([teamId, startAt]) // Optimize queries for team events sorted by date
+  @@index([startAt]) // Optimize queries for upcoming events across teams
+  @@index([leagueId, startAt]) // Optimize league event queries
+  @@index([homeTeamId, awayTeamId]) // Optimize multi-team game queries
+  @@index([venueId, startAt]) // Optimize venue availability queries
+  @@index([venueReservationId])
+}
+
+enum EventType {
+  GAME
+  PRACTICE
+}
+
+// RSVP model
+model RSVP {
+  id        String     @id @default(cuid())
+  status    RSVPStatus @default(NO_RESPONSE)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  // Per-child response (identity graph, decision D5): null keeps the row a
+  // "self/household" response; guardians and admins answer per child via rows
+  // carrying playerId. Event fan-out stays user-level (playerId null).
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  // Postgres treats NULLs as distinct in composite uniques, so a raw-SQL
+  // partial unique index "RSVP_userId_eventId_self_key" ON (userId, eventId)
+  // WHERE playerId IS NULL backs this up (see identity_graph migration).
+  @@unique([userId, eventId, playerId])
+  @@index([playerId])
+}
+
+enum RSVPStatus {
+  GOING
+  NOT_GOING
+  MAYBE
+  NO_RESPONSE
+}
+
+// Invitation model — unified target (identity graph): exactly one of
+// teamId / leagueId / organizationId is set, enforced by the raw-SQL CHECK
+// constraint "Invitation_exactly_one_target" (not expressible in Prisma DSL).
+// Optional role payloads are applied at acceptance (TeamOfficial / VenueStaff
+// row created or userId-linked inside the acceptance transaction).
+model Invitation {
+  id        String           @id @default(cuid())
+  email     String
+  token     String           @unique
+  status    InvitationStatus @default(PENDING)
+  expiresAt DateTime
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  organizationId String?
+  organization   VenueOrganization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Role payloads applied at acceptance (team target → TeamOfficial link,
+  // organization target → VenueStaff membership).
+  officialRole TeamOfficialRole?
+  venueRole    VenueStaffRole?
+
+  // Pending scoped responsibility (feature 007 US3) applied at acceptance.
+  // scopeType selects which target below is authoritative; ASSOCIATION uses
+  // leagueId and TEAM uses teamId, both of which already exist above.
+  associationRole      AssociationRole?
+  associationScopeType AssociationRoleScopeType?
+
+  associationDivisionId String?
+  associationDivision   Division? @relation("InvitationAssociationDivision", fields: [associationDivisionId], references: [id], onDelete: Cascade)
+
+  associationSeasonId String?
+  associationSeason   Season? @relation("InvitationAssociationSeason", fields: [associationSeasonId], references: [id], onDelete: Cascade)
+
+  associationEventId String?
+  associationEvent   Event?  @relation("InvitationAssociationEvent", fields: [associationEventId], references: [id], onDelete: Cascade)
+
+  associationSignupEventId String?
+  associationSignupEvent   SignupEvent? @relation("InvitationAssociationSignupEvent", fields: [associationSignupEventId], references: [id], onDelete: Cascade)
+
+  associationRoundId String?
+  associationRound   RaceRound? @relation("InvitationAssociationRound", fields: [associationRoundId], references: [id], onDelete: Cascade)
+
+  invitedById String
+  invitedBy   User   @relation(fields: [invitedById], references: [id])
+
+  @@index([leagueId])
+  @@index([organizationId])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+}
+
+// League model - simplified version for MVP
+model League {
+  id           String  @id @default(cuid())
+  name         String
+  sport        Sport   @default(MOTORSPORT)
+  contactEmail String
+  contactPhone String?
+  isActive     Boolean @default(true)
+  // Public URL slug for the association events page; generated when the league
+  // first publishes a PUBLIC signup event, editable by league admins. Also the
+  // slug for the public association home added in feature 007 US4 — there is
+  // deliberately only one.
+  slug         String? @unique
+
+  // Feature 007 US4 — publishable association profile. Field names mirror
+  // Venue's so the two public profiles read the same way.
+  publicDescription   String?
+  logoUrl             String?
+  brandPrimaryColor   String?
+  brandSecondaryColor String?
+  publicEmail         String?
+  publicPhone         String?
+  profileStatus       PublicProfileStatus @default(DRAFT)
+  publishedAt         DateTime?
+
+  // Stripe Connect (direct charges) — the league/association is the merchant of
+  // record for its hosted signup events. Mirrors VenueOrganization.
+  stripeAccountId        String? @unique
+  stripeChargesEnabled   Boolean @default(false)
+  stripePayoutsEnabled   Boolean @default(false)
+  stripeDetailsSubmitted Boolean @default(false)
+  // Optional platform application fee in basis points (e.g. 250 = 2.5%). Falls back to env default.
+  platformFeeBps         Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Essential relationships only
+  divisions                 Division[]
+  teams                     Team[]
+  events                    Event[]
+  players                   Player[]
+  users                     LeagueUser[]
+  invitations               Invitation[]
+  playerTransfers           PlayerTransfer[]
+  messages                  LeagueMessage[]
+  notificationPreferences   NotificationPreference[]
+  notificationBatches       NotificationBatch[]
+  auditLogs                 AuditLog[]
+  venues                    Venue[]
+  seasons                   Season[]
+  gameProposals             GameProposal[]
+  venueRelationships        VenueRelationship[]
+  surfaceTimeRequests           SurfaceTimeRequest[]
+  hostedSignupEvents        SignupEvent[]
+  payments                  Payment[]
+  gearCatalogItems          GearCatalogItem[]
+  gearStorageLocations      GearStorageLocation[]
+  gearPoolStocks            GearPoolStock[]
+  gearUnits                 GearUnit[]
+  gearNeeds                 TeamGearNeed[]
+  gearNeedCommands          TeamGearNeedCommand[]
+  gearReservations          GearReservation[]
+  gearAllocations           GearAllocation[]
+  gearHandoffs              GearHandoff[]
+  gearInventoryMovements    GearInventoryMovement[]
+  gearWishlist              GearWishlist?
+  gearPledges               GearPledge[]
+  gearPledgeReceipts        GearPledgeReceipt[]
+  gearPledgeReceiptCommands GearPledgeReceiptCommand[]
+  gearActivity              GearActivity[]
+  notificationOutbox        NotificationOutbox[]
+  venueReservations         VenueReservation[]         @relation("VenueReservationLeagueOwner")
+
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants     AssociationRoleGrant[]
+  volunteerNeeds            VolunteerNeed[]
+  volunteerCredentials VolunteerCredential[]
+
+  // Operational instruction/request threads.
+  threads LeagueThread[]
+
+  // Championship rounds and results.
+  raceRounds RaceRound[]
+
+  // Official association paperwork.
+  documents Document[]
+
+  // Feature 007 US4 — public profiles and content.
+  publicSlugRedirects PublicSlugRedirect[]
+  publicContentItems  PublicContentItem[]
+  @@map("leagues")
+}
+
+// Basic Division model for team organization
+model Division {
+  id                String             @id @default(cuid())
+  name              String
+  ageGroup          String? // U8, U10, Adult, etc. (display)
+  // Structured age level driving score/standings gating for season games.
+  ageClassification AgeClassification?
+  skillLevel        String? // Recreational, Competitive
+  isActive          Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  leagueId           String
+  league             League                   @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  teams              Team[]
+  messageTargeting   MessageTargeting[]
+  signupPhases       EventRegistrationPhase[] @relation("PhaseDivisions")
+  placementDecisions PlacementDecision[]
+  seasonPlacements   SeasonTeamPlacement[]
+
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants AssociationRoleGrant[]
+  volunteerNeeds        VolunteerNeed[]
+  invitationGrants      Invitation[]          @relation("InvitationAssociationDivision")
+  @@map("divisions")
+}
+
+// Simplified LeagueUser model for role management
+model LeagueUser {
+  id       String     @id @default(cuid())
+  role     LeagueRole
+  joinedAt DateTime   @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, leagueId])
+  @@map("league_users")
+}
+
+enum LeagueRole {
+  LEAGUE_ADMIN // Full league control
+  TEAM_ADMIN // Team management within league
+  MEMBER // Basic member
+}
+
+enum GearTrackingMode {
+  POOLED
+  INDIVIDUAL
+}
+
+enum GearCondition {
+  NEW
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+  DAMAGED
+}
+
+enum GearUnitStatus {
+  AVAILABLE
+  RESERVED
+  CHECKED_OUT
+  MAINTENANCE
+  RETIRED
+  LOST
+}
+
+enum GearNeedPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum GearNeedStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  FULFILLED
+  CANCELED
+}
+
+enum GearNeedLineStatus {
+  OPEN
+  PARTIALLY_FULFILLED
+  FULFILLED
+  CANCELED
+}
+
+enum GearReservationStatus {
+  DRAFT
+  REQUESTED
+  APPROVED
+  DECLINED
+  CANCELED
+  FULFILLED
+  CLOSED
+}
+
+enum GearAllocationStatus {
+  PENDING
+  ALLOCATED
+  PICKED_UP
+  PARTIALLY_RETURNED
+  RETURNED
+  RELEASED
+}
+
+enum GearHandoffType {
+  PICKUP
+  RETURN
+  TRANSFER
+  RECEIPT
+  ADJUSTMENT
+}
+
+enum GearReturnDisposition {
+  GOOD
+  DAMAGED
+  LOST
+  CONSUMED
+}
+
+enum GearInventoryMovementType {
+  RECEIPT
+  ALLOCATION
+  RELEASE
+  RETURN
+  TRANSFER
+  ADJUSTMENT
+  WRITE_OFF
+}
+
+enum GearInventoryDirection {
+  INCREASE
+  DECREASE
+  NEUTRAL
+}
+
+enum GearWishlistStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum GearPledgeStatus {
+  PLEDGED
+  RECEIVED
+  DECLINED
+  CANCELED
+  EXPIRED
+}
+
+enum GearPledgePiiRedactionStatus {
+  PENDING
+  REDACTED
+}
+
+enum GearActivityEntityType {
+  CATALOG_ITEM
+  STORAGE_LOCATION
+  POOL_STOCK
+  UNIT
+  NEED
+  RESERVATION
+  ALLOCATION
+  HANDOFF
+  MOVEMENT
+  WISHLIST
+  PLEDGE
+}
+
+enum GearActivityActorKind {
+  USER
+  SYSTEM
+  PUBLIC_DONOR
+}
+
+enum NotificationOutboxStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELED
+}
+
+// League-owned gear catalog and location projections. Composite tenant keys keep
+// every gear relationship within the same League.
+model GearCatalogItem {
+  id            String           @id @default(cuid())
+  leagueId      String
+  normalizedKey String
+  name          String
+  category      String
+  size          String?
+  brand         String?
+  model         String?
+  description   String?
+  attributes    Json?
+  trackingMode  GearTrackingMode @default(POOLED)
+  isActive      Boolean          @default(true)
+  archivedAt    DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  league           League                @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  poolStocks       GearPoolStock[]
+  units            GearUnit[]
+  needLines        TeamGearNeedLine[]
+  reservationLines GearReservationLine[]
+  wishlistItems    GearWishlistItem[]
+  pledgeReceipts   GearPledgeReceipt[]
+
+  @@unique([leagueId, normalizedKey])
+  @@unique([leagueId, id])
+  @@index([leagueId, isActive])
+  @@map("gear_catalog_items")
+}
+
+model GearStorageLocation {
+  id             String    @id @default(cuid())
+  leagueId       String
+  normalizedName String
+  name           String
+  address        String?
+  privateNotes   String?
+  isActive       Boolean   @default(true)
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  league          League                  @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  poolStocks      GearPoolStock[]
+  currentUnits    GearUnit[]              @relation("GearUnitCurrentLocation")
+  movementsBefore GearInventoryMovement[] @relation("GearMovementBeforeLocation")
+  movementsAfter  GearInventoryMovement[] @relation("GearMovementAfterLocation")
+
+  @@unique([leagueId, normalizedName])
+  @@unique([leagueId, id])
+  @@index([leagueId, isActive])
+  @@map("gear_storage_locations")
+}
+
+model GearPoolStock {
+  id             String        @id @default(cuid())
+  leagueId       String
+  catalogItemId  String
+  locationId     String
+  condition      GearCondition @default(GOOD)
+  quantityOnHand Int           @default(0)
+  version        Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  league             League                  @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  catalogItem        GearCatalogItem         @relation(fields: [leagueId, catalogItemId], references: [leagueId, id], onDelete: Restrict)
+  location           GearStorageLocation     @relation(fields: [leagueId, locationId], references: [leagueId, id], onDelete: Restrict)
+  allocations        GearAllocation[]
+  inventoryMovements GearInventoryMovement[]
+  pledgeReceipts     GearPledgeReceipt[]
+
+  @@unique([leagueId, catalogItemId, locationId, condition])
+  @@unique([leagueId, id])
+  @@index([leagueId, catalogItemId])
+  @@index([leagueId, locationId])
+  @@map("gear_pool_stocks")
+}
+
+model GearUnit {
+  id                String         @id @default(cuid())
+  leagueId          String
+  catalogItemId     String
+  currentLocationId String?
+  assetTag          String?
+  serialNumber      String?
+  status            GearUnitStatus @default(AVAILABLE)
+  currentCondition  GearCondition  @default(GOOD)
+  acquiredAt        DateTime?      @db.Date
+  retiredAt         DateTime?      @db.Date
+  notes             String?
+  version           Int            @default(0)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  league             League                  @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  catalogItem        GearCatalogItem         @relation(fields: [leagueId, catalogItemId], references: [leagueId, id], onDelete: Restrict)
+  currentLocation    GearStorageLocation?    @relation("GearUnitCurrentLocation", fields: [leagueId, currentLocationId], references: [leagueId, id], onDelete: Restrict)
+  allocations        GearAllocation[]
+  inventoryMovements GearInventoryMovement[]
+  pledgeReceipts     GearPledgeReceipt[]
+
+  @@unique([leagueId, assetTag])
+  @@unique([leagueId, id])
+  @@index([leagueId, catalogItemId, status])
+  @@index([currentLocationId])
+  @@map("gear_units")
+}
+
+model TeamGearNeed {
+  id          String         @id @default(cuid())
+  leagueId    String
+  teamId      String
+  title       String
+  status      GearNeedStatus @default(DRAFT)
+  notes       String?
+  version     Int            @default(0)
+  submittedAt DateTime?
+  approvedAt  DateTime?
+  fulfilledAt DateTime?
+  canceledAt  DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  createdById String?
+
+  league        League               @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  team          Team                 @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Restrict)
+  createdBy     User?                @relation("GearNeedCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  lines         TeamGearNeedLine[]
+  createCommand TeamGearNeedCommand?
+
+  @@unique([leagueId, id])
+  @@index([leagueId, teamId, status])
+  @@map("team_gear_needs")
+}
+
+// Durable idempotency journal for draft-need creation. Its tenant/team scoped
+// key makes retries return the original need instead of creating another draft.
+model TeamGearNeedCommand {
+  id             String   @id @default(cuid())
+  leagueId       String
+  teamId         String
+  idempotencyKey String
+  needId         String
+  createdAt      DateTime @default(now())
+
+  league League       @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  team   Team         @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Restrict)
+  need   TeamGearNeed @relation(fields: [leagueId, needId], references: [leagueId, id], onDelete: Restrict)
+
+  @@unique([leagueId, id])
+  @@unique([leagueId, teamId, idempotencyKey])
+  @@unique([leagueId, needId])
+  @@index([leagueId, teamId, createdAt])
+  @@map("team_gear_need_commands")
+}
+
+model TeamGearNeedLine {
+  id               String             @id @default(cuid())
+  leagueId         String
+  needId           String
+  catalogItemId    String?
+  nameSnapshot     String
+  categorySnapshot String?
+  sizeSnapshot     String?
+  trackingMode     GearTrackingMode?
+  requestedQty     Int
+  fulfilledQty     Int                @default(0)
+  canceledQty      Int                @default(0)
+  priority         GearNeedPriority   @default(NORMAL)
+  status           GearNeedLineStatus @default(OPEN)
+  notes            String?
+  version          Int                @default(0)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  need             TeamGearNeed          @relation(fields: [leagueId, needId], references: [leagueId, id], onDelete: Restrict)
+  catalogItem      GearCatalogItem?      @relation(fields: [leagueId, catalogItemId], references: [leagueId, id], onDelete: Restrict)
+  reservationLines GearReservationLine[]
+
+  @@unique([leagueId, id])
+  @@index([needId, status])
+  @@index([catalogItemId])
+  @@map("team_gear_need_lines")
+}
+
+model GearReservation {
+  id                     String                @id @default(cuid())
+  leagueId               String
+  teamId                 String
+  status                 GearReservationStatus @default(DRAFT)
+  requestedStartDate     DateTime              @db.Date
+  requestedEndDate       DateTime              @db.Date
+  approvedStartDate      DateTime?             @db.Date
+  approvedEndDate        DateTime?             @db.Date
+  custodianNameSnapshot  String
+  custodianEmailSnapshot String?
+  custodianPhoneSnapshot String?
+  requestNotes           String?
+  decisionNotes          String?
+  version                Int                   @default(0)
+  requestedAt            DateTime              @default(now())
+  decidedAt              DateTime?
+  custodyStartedAt       DateTime?
+  custodyEndedAt         DateTime?
+  canceledAt             DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  requestedById          String?
+  decidedById            String?
+
+  league      League                @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  team        Team                  @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Restrict)
+  requestedBy User?                 @relation("GearReservationRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  decidedBy   User?                 @relation("GearReservationDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  lines       GearReservationLine[]
+  handoffs    GearHandoff[]
+
+  @@unique([leagueId, id])
+  @@index([leagueId, teamId, status])
+  @@index([leagueId, requestedStartDate, requestedEndDate])
+  @@map("gear_reservations")
+}
+
+model GearReservationLine {
+  id            String   @id @default(cuid())
+  leagueId      String
+  reservationId String
+  catalogItemId String?
+  needLineId    String?
+  nameSnapshot  String
+  requestedQty  Int
+  approvedQty   Int      @default(0)
+  allocatedQty  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  reservation GearReservation   @relation(fields: [leagueId, reservationId], references: [leagueId, id], onDelete: Restrict)
+  catalogItem GearCatalogItem?  @relation(fields: [leagueId, catalogItemId], references: [leagueId, id], onDelete: Restrict)
+  needLine    TeamGearNeedLine? @relation(fields: [leagueId, needLineId], references: [leagueId, id], onDelete: Restrict)
+  allocations GearAllocation[]
+
+  @@unique([leagueId, id])
+  @@index([reservationId])
+  @@index([needLineId])
+  @@map("gear_reservation_lines")
+}
+
+model GearAllocation {
+  id                 String               @id @default(cuid())
+  leagueId           String
+  reservationLineId  String
+  poolStockId        String?
+  gearUnitId         String?
+  status             GearAllocationStatus @default(PENDING)
+  allocatedQty       Int                  @default(0)
+  pickedUpQty        Int                  @default(0)
+  returnedQty        Int                  @default(0)
+  releasedQty        Int                  @default(0)
+  effectiveStartDate DateTime?            @db.Date
+  effectiveEndDate   DateTime?            @db.Date
+  version            Int                  @default(0)
+  allocatedAt        DateTime?
+  pickedUpAt         DateTime?
+  returnedAt         DateTime?
+  releasedAt         DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  allocatedById      String?
+
+  league             League                  @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  reservationLine    GearReservationLine     @relation(fields: [leagueId, reservationLineId], references: [leagueId, id], onDelete: Restrict)
+  poolStock          GearPoolStock?          @relation(fields: [leagueId, poolStockId], references: [leagueId, id], onDelete: Restrict)
+  gearUnit           GearUnit?               @relation(fields: [leagueId, gearUnitId], references: [leagueId, id], onDelete: Restrict)
+  allocatedBy        User?                   @relation("GearAllocationAllocator", fields: [allocatedById], references: [id], onDelete: SetNull)
+  handoffs           GearHandoff[]
+  inventoryMovements GearInventoryMovement[]
+
+  @@unique([leagueId, id])
+  @@index([leagueId, status])
+  @@index([reservationLineId])
+  @@index([poolStockId])
+  @@index([gearUnitId])
+  @@map("gear_allocations")
+}
+
+model GearHandoff {
+  id                    String                 @id @default(cuid())
+  leagueId              String
+  reservationId         String?
+  allocationId          String?
+  type                  GearHandoffType
+  returnDisposition     GearReturnDisposition?
+  custodianNameSnapshot String?
+  occurredAt            DateTime               @default(now())
+  notes                 String?
+  createdAt             DateTime               @default(now())
+  handledById           String?
+
+  league             League                  @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  reservation        GearReservation?        @relation(fields: [leagueId, reservationId], references: [leagueId, id], onDelete: Restrict)
+  allocation         GearAllocation?         @relation(fields: [leagueId, allocationId], references: [leagueId, id], onDelete: Restrict)
+  handledBy          User?                   @relation("GearHandoffHandler", fields: [handledById], references: [id], onDelete: SetNull)
+  inventoryMovements GearInventoryMovement[]
+
+  @@unique([leagueId, id])
+  @@index([leagueId, occurredAt])
+  @@index([reservationId])
+  @@index([allocationId])
+  @@map("gear_handoffs")
+}
+
+model GearWishlist {
+  id          String             @id @default(cuid())
+  leagueId    String             @unique
+  shareToken  String             @unique
+  status      GearWishlistStatus @default(DRAFT)
+  title       String
+  description String?
+  version     Int                @default(0)
+  publishedAt DateTime?
+  archivedAt  DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  league League             @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  items  GearWishlistItem[]
+
+  @@unique([leagueId, id])
+  @@index([status])
+  @@map("gear_wishlists")
+}
+
+model GearWishlistItem {
+  id               String   @id @default(cuid())
+  leagueId         String
+  wishlistId       String
+  catalogItemId    String?
+  normalizedKey    String
+  nameSnapshot     String
+  categorySnapshot String?
+  sizeSnapshot     String?
+  description      String?
+  targetQty        Int
+  pledgedQty       Int      @default(0)
+  receivedQty      Int      @default(0)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  wishlist    GearWishlist     @relation(fields: [leagueId, wishlistId], references: [leagueId, id], onDelete: Restrict)
+  catalogItem GearCatalogItem? @relation(fields: [leagueId, catalogItemId], references: [leagueId, id], onDelete: Restrict)
+  pledges     GearPledge[]
+
+  @@unique([leagueId, id])
+  @@index([wishlistId, isActive])
+  @@index([catalogItemId])
+  @@map("gear_wishlist_items")
+}
+
+model GearPledge {
+  id                 String                       @id @default(cuid())
+  leagueId           String
+  wishlistItemId     String
+  donorName          String?
+  donorEmail         String?
+  donorPhone         String?
+  contactConsentAt   DateTime?
+  status             GearPledgeStatus             @default(PLEDGED)
+  quantity           Int
+  note               String?
+  idempotencyKey     String
+  version            Int                          @default(0)
+  expiresAt          DateTime?
+  receivedAt         DateTime?
+  piiRedactionStatus GearPledgePiiRedactionStatus @default(PENDING)
+  piiRedactedAt      DateTime?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  league          League                     @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  wishlistItem    GearWishlistItem           @relation(fields: [leagueId, wishlistItemId], references: [leagueId, id], onDelete: Restrict)
+  receipts        GearPledgeReceipt[]
+  receiptCommands GearPledgeReceiptCommand[]
+
+  @@unique([leagueId, idempotencyKey])
+  @@unique([leagueId, id])
+  @@index([wishlistItemId, status])
+  @@map("gear_pledges")
+}
+
+model GearPledgeReceipt {
+  id                    String   @id @default(cuid())
+  leagueId              String
+  pledgeId              String
+  catalogItemId         String?
+  poolStockId           String?
+  gearUnitId            String?
+  receiptCommandId      String?
+  correctionOfReceiptId String?
+  correctionReason      String?
+  quantity              Int
+  receivedAt            DateTime @default(now())
+  notes                 String?
+  createdAt             DateTime @default(now())
+
+  league             League                    @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  pledge             GearPledge                @relation(fields: [leagueId, pledgeId], references: [leagueId, id], onDelete: Restrict)
+  catalogItem        GearCatalogItem?          @relation(fields: [leagueId, catalogItemId], references: [leagueId, id], onDelete: Restrict)
+  poolStock          GearPoolStock?            @relation(fields: [leagueId, poolStockId], references: [leagueId, id], onDelete: Restrict)
+  gearUnit           GearUnit?                 @relation(fields: [leagueId, gearUnitId], references: [leagueId, id], onDelete: Restrict)
+  receiptCommand     GearPledgeReceiptCommand? @relation(fields: [leagueId, receiptCommandId], references: [leagueId, id], onDelete: Restrict)
+  correctionOf       GearPledgeReceipt?        @relation("GearReceiptCorrection", fields: [leagueId, correctionOfReceiptId], references: [leagueId, id], onDelete: Restrict)
+  correction         GearPledgeReceipt?        @relation("GearReceiptCorrection")
+  inventoryMovements GearInventoryMovement[]
+
+  @@unique([leagueId, id])
+  @@unique([leagueId, correctionOfReceiptId])
+  @@index([leagueId, receivedAt])
+  @@index([pledgeId])
+  @@map("gear_pledge_receipts")
+}
+
+// A durable receipt-command journal makes receipt retries idempotent even when
+// a command creates multiple tagged-unit receipts.
+model GearPledgeReceiptCommand {
+  id               String           @id @default(cuid())
+  leagueId         String
+  pledgeId         String
+  idempotencyKey   String
+  payloadHash      String
+  expectedVersion  Int
+  resultingVersion Int
+  resultingStatus  GearPledgeStatus
+  createdAt        DateTime         @default(now())
+
+  league   League              @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  pledge   GearPledge          @relation(fields: [leagueId, pledgeId], references: [leagueId, id], onDelete: Restrict)
+  receipts GearPledgeReceipt[]
+
+  @@unique([leagueId, id])
+  @@unique([leagueId, pledgeId, idempotencyKey])
+  @@index([leagueId, pledgeId, createdAt])
+  @@map("gear_pledge_receipt_commands")
+}
+
+// Immutable operational ledger. `details` deliberately excludes public donor
+// PII; public pledge data remains isolated in GearPledge.
+model GearActivity {
+  id          String                 @id @default(cuid())
+  leagueId    String
+  entityType  GearActivityEntityType
+  entityId    String
+  action      String
+  actorKind   GearActivityActorKind
+  details     Json?
+  occurredAt  DateTime               @default(now())
+  actorUserId String?
+
+  league    League @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  actorUser User?  @relation("GearActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@unique([leagueId, id])
+  @@index([leagueId, entityType, entityId, occurredAt])
+  @@map("gear_activity")
+}
+
+model GearInventoryMovement {
+  id               String                    @id @default(cuid())
+  leagueId         String
+  type             GearInventoryMovementType
+  direction        GearInventoryDirection
+  poolStockId      String?
+  gearUnitId       String?
+  allocationId     String?
+  handoffId        String?
+  pledgeReceiptId  String?
+  quantity         Int
+  beforeLocationId String?
+  afterLocationId  String?
+  beforeCondition  GearCondition?
+  afterCondition   GearCondition?
+  occurredAt       DateTime                  @default(now())
+  notes            String?
+  createdAt        DateTime                  @default(now())
+  recordedById     String?
+
+  league         League               @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  poolStock      GearPoolStock?       @relation(fields: [leagueId, poolStockId], references: [leagueId, id], onDelete: Restrict)
+  gearUnit       GearUnit?            @relation(fields: [leagueId, gearUnitId], references: [leagueId, id], onDelete: Restrict)
+  allocation     GearAllocation?      @relation(fields: [leagueId, allocationId], references: [leagueId, id], onDelete: Restrict)
+  handoff        GearHandoff?         @relation(fields: [leagueId, handoffId], references: [leagueId, id], onDelete: Restrict)
+  pledgeReceipt  GearPledgeReceipt?   @relation(fields: [leagueId, pledgeReceiptId], references: [leagueId, id], onDelete: Restrict)
+  beforeLocation GearStorageLocation? @relation("GearMovementBeforeLocation", fields: [leagueId, beforeLocationId], references: [leagueId, id], onDelete: Restrict)
+  afterLocation  GearStorageLocation? @relation("GearMovementAfterLocation", fields: [leagueId, afterLocationId], references: [leagueId, id], onDelete: Restrict)
+  recordedBy     User?                @relation("GearMovementRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([leagueId, id])
+  @@index([leagueId, occurredAt])
+  @@index([poolStockId])
+  @@index([gearUnitId])
+  @@index([allocationId])
+  @@map("gear_inventory_movements")
+}
+
+model NotificationOutbox {
+  id                  String                   @id @default(cuid())
+  leagueId            String
+  recipientUserId     String?
+  // The captured delivery destination survives account deletion; a privileged,
+  // terminal-only retention routine may replace it with a redacted address.
+  recipientEmail      String
+  recipientRedactedAt DateTime?
+  eventType           String
+  aggregateType       String
+  aggregateId         String
+  payload             Json
+  dedupeKey           String
+  status              NotificationOutboxStatus @default(PENDING)
+  attempts            Int                      @default(0)
+  scheduledAt         DateTime                 @default(now())
+  lockedAt            DateTime?
+  lastAttemptAt       DateTime?
+  sentAt              DateTime?
+  failedAt            DateTime?
+  lastError           String?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+
+  league        League @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+  recipientUser User?  @relation("NotificationOutboxRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
+
+  @@unique([leagueId, dedupeKey])
+  @@unique([leagueId, id])
+  @@index([status, scheduledAt])
+  @@index([leagueId, aggregateType, aggregateId])
+  @@map("notification_outbox")
+}
+
+// A versioned singleton cursor prevents a chronically overdue low-id reservation
+// from starving later custody reminders when cron work is budgeted.
+model GearReminderSweep {
+  id        String   @id
+  cursorId  String?
+  version   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("gear_reminder_sweeps")
+}
+
+// Player transfer history model for audit trail
+model PlayerTransfer {
+  id        String   @id @default(cuid())
+  reason    String? // Optional reason for transfer
+  createdAt DateTime @default(now())
+
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  fromTeamId String
+  fromTeam   Team   @relation("TransferFromTeam", fields: [fromTeamId], references: [id])
+
+  toTeamId String
+  toTeam   Team   @relation("TransferToTeam", fields: [toTeamId], references: [id])
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Restrict)
+
+  transferredById String
+  transferredBy   User   @relation(fields: [transferredById], references: [id])
+
+  @@map("player_transfers")
+}
+
+// League message model for targeted messaging system
+model LeagueMessage {
+  id          String            @id @default(cuid())
+  subject     String
+  content     String
+  messageType LeagueMessageType @default(MESSAGE)
+  priority    MessagePriority   @default(NORMAL)
+  createdAt   DateTime          @default(now())
+
+  // A message is scoped to EITHER a league OR a standalone team (exactly one;
+  // enforced by a DB CHECK constraint). Standalone teams have no league, so
+  // team-scoped messages let a team admin announce to their own members.
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  senderId String
+  sender   User   @relation(fields: [senderId], references: [id])
+
+  // Message targeting
+  targeting       MessageTargeting[]
+  recipients      MessageRecipient[]
+  batchedMessages BatchedMessage[]
+
+  @@index([leagueId, createdAt])
+  @@index([teamId, createdAt])
+  @@map("league_messages")
+}
+
+enum LeagueMessageType {
+  MESSAGE // Regular targeted message
+  ANNOUNCEMENT // League-wide announcement
+}
+
+enum MessagePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// Message targeting configuration
+model MessageTargeting {
+  id String @id @default(cuid())
+
+  messageId String
+  message   LeagueMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // Targeting options (at least one must be specified)
+  entireLeague Boolean   @default(false)
+  divisionId   String?
+  division     Division? @relation(fields: [divisionId], references: [id])
+  teamId       String?
+  team         Team?     @relation(fields: [teamId], references: [id])
+
+  @@map("message_targeting")
+}
+
+// Message recipients for audit trail
+model MessageRecipient {
+  id             String                @id @default(cuid())
+  sentAt         DateTime              @default(now())
+  deliveryStatus MessageDeliveryStatus @default(PENDING)
+
+  messageId String
+  message   LeagueMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId, sentAt]) // Recent-messages widget: viewer's messages newest-first
+  @@map("message_recipients")
+}
+
+enum MessageDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Operational instruction/request threads.
+//
+// A two-way operational conversation between an association and its teams.
+// LeagueMessage is a one-way broadcast with no reply path; this is the surface
+// for work that expects an answer:
+//
+//   INSTRUCTION  — an admin issues something to one, some, or all teams, and
+//                  tracks per team who has responded (LeagueThreadTeamStatus,
+//                  shaped after RSVP: one row per team, defaulting to PENDING).
+//   TEAM_REQUEST — a team raises something with the admin. There is exactly one
+//                  team, so it needs no per-team rows: originTeamId carries it.
+//
+// Replies from either side are append-only LeagueThreadEntry rows, following
+// GameProposalEntry: the log is never mutated, and status transitions use a
+// guarded updateMany so concurrent actors cannot both win.
+// ---------------------------------------------------------------------------
+model LeagueThread {
+  id       String           @id @default(cuid())
+  kind     LeagueThreadKind
+  subject  String
+  body     String
+  priority MessagePriority  @default(NORMAL)
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // Set only for kind=TEAM_REQUEST — the team that raised it. Null for
+  // kind=INSTRUCTION, where the audience lives in `targets` instead.
+  originTeamId String?
+  originTeam   Team?   @relation("LeagueThreadOrigin", fields: [originTeamId], references: [id], onDelete: Cascade)
+
+  // Whether targeted teams must reply. False makes an INSTRUCTION purely
+  // informational, so its target rows are created already ACKNOWLEDGED.
+  requiresResponse Boolean            @default(true)
+  status           LeagueThreadStatus @default(OPEN)
+  resolvedAt       DateTime?
+  resolvedById     String?
+  resolvedBy       User?              @relation("LeagueThreadResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  createdById String
+  createdBy   User     @relation("LeagueThreadCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  targets   LeagueThreadTeamStatus[]
+  entries   LeagueThreadEntry[]
+  documents Document[]
+
+  @@index([leagueId, kind, status, createdAt])
+  @@index([originTeamId, status])
+  @@map("league_threads")
+}
+
+enum LeagueThreadKind {
+  INSTRUCTION // admin -> one/some/all teams
+  TEAM_REQUEST // team -> admin
+}
+
+enum LeagueThreadStatus {
+  OPEN
+  RESOLVED
+  CLOSED // closed without a formal resolution (superseded, withdrawn)
+}
+
+// Per-team response tracking for an INSTRUCTION thread. Mirrors RSVP: one row
+// per targeted team, defaulting to "no response yet", unique per (thread, team).
+model LeagueThreadTeamStatus {
+  id          String                      @id @default(cuid())
+  status      LeagueThreadTeamStatusValue @default(PENDING)
+  respondedAt DateTime?
+  updatedAt   DateTime                    @updatedAt
+
+  threadId String
+  thread   LeagueThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, teamId])
+  @@index([teamId, status])
+  @@map("league_thread_team_status")
+}
+
+enum LeagueThreadTeamStatusValue {
+  PENDING // no response yet
+  ACKNOWLEDGED // the team has replied
+}
+
+// Append-only reply log for a thread. Never updated in place — the sequence of
+// entries is the audit trail (GameProposalEntry precedent).
+model LeagueThreadEntry {
+  id   String                @id @default(cuid())
+  kind LeagueThreadEntryKind @default(MESSAGE)
+  body String?
+
+  threadId String
+  thread   LeagueThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  // Null when the association (not a team) posted the entry.
+  actorTeamId String?
+  actorTeam   Team?   @relation(fields: [actorTeamId], references: [id], onDelete: SetNull)
+
+  actorUserId String
+  actorUser   User     @relation("LeagueThreadActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  @@index([threadId, createdAt])
+  @@map("league_thread_entries")
+}
+
+enum LeagueThreadEntryKind {
+  MESSAGE // a reply from either side
+  RESOLVE // admin marked the thread resolved
+  CLOSE // admin closed the thread
+  REOPEN
+}
+
+// ---------------------------------------------------------------------------
+// Championship rounds and results.
+//
+// Deliberately NOT built on SeasonGame: that model is a fixture between exactly
+// two teams (homeTeamId/awayTeamId, homeScore/awayScore) and cannot represent a
+// grid of many entrants scoring into one championship table.
+//
+// Scope is position and points only. Lap times, gaps, and sector data stay with
+// the sanctioning body's timing system, which remains authoritative.
+// ---------------------------------------------------------------------------
+model RaceRound {
+  id           String          @id @default(cuid())
+  name         String
+  roundNumber  Int
+  raceDate     DateTime        @db.Date
+  // A race weekend spans days, so its sessions need a real interval. raceDate
+  // stays as the headline date every existing view and export already reads;
+  // startAt/endAt are the operational window, and are nullable so rounds
+  // recorded before sessions existed stay valid.
+  startAt      DateTime?
+  endAt        DateTime?
+  timezone     String          @default("America/New_York")
+  locationText String? // free text when no structured venue is on file
+  notes        String?
+  status       RaceRoundStatus @default(SCHEDULED)
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  seasonId String?
+  season   Season? @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+
+  venueId String?
+  venue   Venue?  @relation(fields: [venueId], references: [id], onDelete: SetNull)
+
+  createdById String
+  createdBy   User     @relation("RaceRoundCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  results        RaceResult[]
+  sessions       RaceSession[]
+  entries        RaceEntry[]
+  volunteerNeeds VolunteerNeed[]
+  waiver         RoundWaiver?
+  roleGrants     AssociationRoleGrant[]
+  invitations    Invitation[]           @relation("InvitationAssociationRound")
+
+  @@unique([leagueId, roundNumber])
+  @@index([leagueId, raceDate])
+  @@index([seasonId, roundNumber])
+  @@map("race_rounds")
+}
+
+/// What a session on a race weekend is for. ADMIN covers sign-on,
+/// scrutineering, and briefings: parts of the timetable that occupy people and
+/// sometimes space, but never the track.
+enum RaceSessionKind {
+  PRACTICE
+  QUALIFYING
+  RACE
+  SUPPORT
+  ADMIN
+}
+
+/// One timetabled session inside a race weekend.
+///
+/// A session that occupies venue space carries a reservationId like every other
+/// occupying activity (FR-007/FR-008): the reservation remains the single
+/// occupancy record, and the session is one of the user-facing records that
+/// refers to it rather than a second claim on the same space.
+model RaceSession {
+  id        String          @id @default(cuid())
+  name      String
+  kind      RaceSessionKind @default(RACE)
+  startAt   DateTime
+  endAt     DateTime
+  timezone  String
+  /// Display order within the weekend, and the tie-break for equal start times.
+  sortOrder Int
+  notes     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  roundId String
+  round   RaceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  venueId String?
+  venue   Venue?  @relation(fields: [venueId], references: [id], onDelete: SetNull)
+
+  surfaceId String?
+  surface   VenueSurface? @relation(fields: [surfaceId], references: [id], onDelete: SetNull)
+
+  segmentId String?
+  segment   SurfaceSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+
+  reservationId String?
+  reservation   VenueReservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("RaceSessionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  volunteerNeeds VolunteerNeed[]
+
+  @@unique([roundId, sortOrder])
+  @@index([roundId, startAt])
+  @@index([reservationId])
+  @@map("race_sessions")
+}
+
+/// A waiver that must be accepted before working or entering a race weekend.
+///
+/// Versioned text with a per-person acceptance record, following the shape of
+/// `ParentalConsent`: the acceptance outlives the account that made it, and the
+/// exact wording agreed to is recoverable years later. `ParentalConsent` itself
+/// is deliberately not reused — it is COPPA-specific, counsel-versioned, and
+/// diluting it would make both harder to reason about.
+model RoundWaiver {
+  id        String   @id @default(cuid())
+  /// Bumped by the publisher whenever the wording changes. Acceptances record
+  /// the version they agreed to, so an edit does not silently re-scope consent.
+  version   Int      @default(1)
+  title     String
+  body      String
+  /// Null until published; an unpublished waiver gates nothing.
+  publishedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roundId String    @unique
+  round   RaceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  createdById String?
+  createdBy   User?   @relation("RoundWaiverAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  acceptances RoundWaiverAcceptance[]
+
+  @@map("round_waivers")
+}
+
+/// One person accepting one version of one waiver.
+model RoundWaiverAcceptance {
+  id             String   @id @default(cuid())
+  /// The version accepted. A later edit bumps the waiver version and leaves
+  /// this row describing what was actually agreed to.
+  waiverVersion  Int
+  acceptedAt     DateTime @default(now())
+  /// Captured for the same evidentiary reason ParentalConsent captures method.
+  ipAddress      String?
+  /// Denormalized so the record still identifies the signer after the account
+  /// is deleted, which is the point of keeping it.
+  acceptedByName  String?
+  acceptedByEmail String?
+
+  waiverId String
+  waiver   RoundWaiver @relation(fields: [waiverId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation("RoundWaiverAcceptor", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([waiverId, userId, waiverVersion])
+  @@index([waiverId, acceptedAt])
+  @@map("round_waiver_acceptances")
+}
+
+enum RaceEntryStatus {
+  PROVISIONAL
+  CONFIRMED
+  WITHDRAWN
+}
+
+/// One car on the entry list for a round.
+///
+/// The unique key matches RaceResult exactly (round, team, driver), so a
+/// results sheet can be seeded from the entry list without a second identity
+/// scheme for the same car.
+model RaceEntry {
+  id        String          @id @default(cuid())
+  carNumber String?
+  className String?
+  status    RaceEntryStatus @default(PROVISIONAL)
+  notes     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  roundId String
+  round   RaceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  registeredById String?
+  registeredBy   User?   @relation("RaceEntryRegistrar", fields: [registeredById], references: [id], onDelete: SetNull)
+
+  // A team-level entry (no driver) is deduped by a partial unique index in the
+  // migration, on (roundId, teamId) WHERE playerId IS NULL. Postgres treats
+  // NULLs as distinct, so the compound key below does not cover that case, and
+  // Prisma cannot express a partial index.
+  @@unique([roundId, teamId, playerId])
+  @@index([roundId, status])
+  @@index([teamId])
+  @@map("race_entries")
+}
+
+enum RaceRoundStatus {
+  SCHEDULED
+  RESULTS_PENDING
+  FINALIZED
+}
+
+// One entrant's result in one round. Standings are summed from these rows at
+// read time and never stored, so correcting a result cannot leave a stale table.
+model RaceResult {
+  id       String           @id @default(cuid())
+  position Int? // null for DNF/DNS/DSQ — the reason lives in `status`
+  points   Decimal          @default(0) @db.Decimal(6, 2) // decimal: half-points and bonus points are common
+  status   RaceResultStatus @default(CLASSIFIED)
+  notes    String?
+
+  roundId String
+  round   RaceRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  teamId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  // The individual driver, when the entry is attributed to one. Null keeps the
+  // result at team level.
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  recordedById String
+  recordedBy   User     @relation("RaceResultRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([roundId, teamId, playerId])
+  @@index([roundId, position])
+  @@index([teamId])
+  @@map("race_results")
+}
+
+enum RaceResultStatus {
+  CLASSIFIED
+  DNF // did not finish
+  DNS // did not start
+  DSQ // disqualified
+}
+
+// ---------------------------------------------------------------------------
+// Official association paperwork.
+//
+// Distinct from EventMediaItem, which is a participant-visible PHOTO/VIDEO
+// gallery scoped to a SignupEvent. These are operational documents — entry
+// forms, scrutineering sheets, medical certificates, results sheets — that are
+// never public: the query layer restricts each one to association admins and
+// the owning team.
+// ---------------------------------------------------------------------------
+model Document {
+  id           String         @id @default(cuid())
+  kind         DocumentKind   @default(OTHER)
+  title        String
+  // Which lib/storage provider holds the bytes ("s3" | "vercel-blob"), and
+  // its reference: an object key on S3, the full blob URL on Vercel Blob.
+  // Validated against the league prefix at finalize time.
+  storageProvider String @default("vercel-blob")
+  storageKey      String
+  contentType  String
+  sizeBytes    Int
+  status       DocumentStatus @default(ACTIVE)
+  createdAt    DateTime       @default(now())
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // The team the document concerns. Null means association-wide paperwork.
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  // Optionally filed against the instruction or request it answers.
+  threadId String?
+  thread   LeagueThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+
+  uploaderId String
+  uploader   User   @relation("DocumentUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
+
+  removedById String?
+  removedBy   User?     @relation("DocumentRemover", fields: [removedById], references: [id], onDelete: SetNull)
+  removedAt   DateTime?
+
+  @@index([leagueId, kind, createdAt])
+  @@index([teamId, kind, createdAt])
+  @@index([threadId])
+  @@map("documents")
+}
+
+enum DocumentKind {
+  ENTRY_FORM
+  TECH_INSPECTION
+  MEDICAL_CERTIFICATE
+  RESULTS_SHEET
+  OTHER
+}
+
+enum DocumentStatus {
+  ACTIVE
+  REMOVED
+}
+
+// User notification preferences for league communications
+model NotificationPreference {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // Notification types
+  leagueMessages            Boolean @default(true) // Targeted league messages
+  leagueAnnouncements       Boolean @default(true) // League-wide announcements
+  eventNotifications        Boolean @default(true) // Event created/updated/cancelled
+  rsvpReminders             Boolean @default(true) // RSVP reminder emails
+  teamInvitations           Boolean @default(true) // Team invitation emails
+  gearNotifications         Boolean @default(true) // Gear requests, custody, and in-kind pledge updates
+  // Operational instruction/request threads. Distinct from leagueMessages and
+  // leagueAnnouncements: those are one-way broadcasts, these expect a reply.
+  operationalThreadNotifications Boolean @default(true)
+
+  // Delivery preferences
+  emailEnabled  Boolean @default(true) // Receive emails
+  urgentOnly    Boolean @default(false) // Only urgent/high priority messages
+  batchDelivery Boolean @default(false) // Batch non-urgent messages
+
+  // Unsubscribe token for email management
+  unsubscribeToken String? @unique
+
+  @@unique([userId, leagueId])
+  @@map("notification_preferences")
+}
+
+// Notification batch for grouping non-urgent messages
+model NotificationBatch {
+  id          String                  @id @default(cuid())
+  scheduledAt DateTime // When to send the batch
+  sentAt      DateTime?
+  status      NotificationBatchStatus @default(PENDING)
+  createdAt   DateTime                @default(now())
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  messages BatchedMessage[]
+
+  @@index([scheduledAt, status])
+  @@map("notification_batches")
+}
+
+enum NotificationBatchStatus {
+  PENDING
+  SENT
+  CANCELLED
+}
+
+// Individual messages within a notification batch
+model BatchedMessage {
+  id        String          @id @default(cuid())
+  subject   String
+  content   String
+  priority  MessagePriority
+  createdAt DateTime        @default(now())
+
+  batchId String
+  batch   NotificationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  // Reference to original message if applicable
+  messageId String?
+  message   LeagueMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@map("batched_messages")
+}
+
+// Venue model for structured location management
+enum SurfaceType {
+  CIRCUIT // A full road/race circuit
+  TRACK // Oval, kart, or short track
+  PADDOCK // Pit/paddock area (scrutineering, sign-on, parc fermé)
+  ROOM // Briefing room, hospitality, classroom
+  OTHER
+}
+
+enum VenueVisibility {
+  PUBLIC // Anyone can see and use
+  LEAGUE // Visible to all teams in a league
+  TEAM // Private to the owning team
+}
+
+enum VenueOrganizationType {
+  CIRCUIT
+  KART_TRACK
+  DRAG_STRIP
+  MOTORSPORT_COMPLEX
+  OTHER
+}
+
+enum VenueOrganizationStatus {
+  DRAFT
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum VenueStaffRole {
+  OWNER
+  MANAGER
+  SCHEDULER
+  CONTENT_EDITOR
+  REQUEST_MANAGER
+  VIEWER
+}
+
+enum VenueStaffStatus {
+  INVITED
+  ACTIVE
+  REMOVED
+}
+
+enum VenueProfileStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+  ARCHIVED
+}
+
+enum OperatingHourStatus {
+  OPEN
+  CLOSED
+  RESTRICTED
+}
+
+enum VenueScheduleActivityType {
+  OPEN_TRACK_DAY
+  TEST_SESSION
+  OPEN_PRACTICE
+  KARTING
+  SPECIALTY_EVENT
+  PRIVATE_COACHING
+  DRIVER_TRAINING
+  TEAM_TEST
+  CLUB_BOOKING
+  RENTAL
+  CLOSURE
+  CUSTOM
+}
+
+enum VenueScheduleAudience {
+  PUBLIC
+  TEAMS
+  COACHES
+  ORGANIZATIONS
+  INVITE_ONLY
+  STAFF_ONLY
+}
+
+enum VenueScheduleVisibility {
+  PUBLIC
+  AUTHENTICATED
+  RELATIONSHIP_ONLY
+  PRIVATE
+}
+
+enum VenueScheduleBlockStatus {
+  DRAFT
+  PUBLISHED
+  CANCELED
+  ARCHIVED
+}
+
+enum VenueScheduleBlockIntent {
+  OFFERING
+  VENUE_ACTIVITY
+  CLOSURE
+  INFORMATION
+}
+
+enum RegistrationMode {
+  INFO_ONLY
+  REQUEST_REQUIRED
+  EXTERNAL_REGISTRATION
+  SELF_REGISTER
+}
+
+enum SessionRegistrationStatus {
+  PENDING
+  CONFIRMED
+  WAITLISTED
+  CANCELED
+  REFUNDED
+  EXPIRED
+}
+
+enum PaymentStatus {
+  FREE
+  REQUIRES_PAYMENT
+  PROCESSING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELED
+}
+
+enum SurfaceTimeRequestStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  PARTIALLY_ACCEPTED
+  DECLINED
+  CANCELED
+  EXPIRED
+}
+
+enum VenueReservationStatus {
+  HELD
+  CONFIRMED
+  RELEASED
+  CANCELED
+  COMPLETED
+}
+
+enum VenueReservationUsageStatus {
+  PENDING
+  USED
+  UNUSED
+}
+
+enum LessonOfferingType {
+  PRIVATE
+  SEMI_PRIVATE
+  GROUP
+  CLINIC
+  CAMP
+}
+
+enum LessonOfferingStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum VenueContentPostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  UNPUBLISHED
+  ARCHIVED
+}
+
+enum VenueRelationshipType {
+  PREFERRED
+  HOME
+}
+
+enum VenueRelationshipTargetType {
+  TEAM
+  LEAGUE
+  COACH
+  ORGANIZATION
+}
+
+enum VenueRelationshipStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+  REMOVED
+  EXPIRED
+}
+
+enum SkillLevelSource {
+  FMSCI // Federation of Motor Sports Clubs of India licence grades
+  CLUB_CUSTOM // Circuit- or club-defined ladder
+  OTHER
+}
+
+enum SkillLevelDiscipline {
+  CIRCUIT_RACING
+  KARTING
+  RALLY
+  DRAG_RACING
+  HILL_CLIMB
+  OTHER
+}
+
+model VenueOrganization {
+  id                  String                  @id @default(cuid())
+  name                String
+  type                VenueOrganizationType   @default(CIRCUIT)
+  description         String?
+  primaryContactName  String?
+  primaryContactEmail String?
+  primaryContactPhone String?
+  website             String?
+  status              VenueOrganizationStatus @default(DRAFT)
+
+  // Stripe Connect (direct charges) — the organization is the merchant of record.
+  stripeAccountId        String? @unique
+  stripeChargesEnabled   Boolean @default(false)
+  stripePayoutsEnabled   Boolean @default(false)
+  stripeDetailsSubmitted Boolean @default(false)
+  // Optional platform application fee in basis points (e.g. 250 = 2.5%). Falls back to env default.
+  platformFeeBps         Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdById String
+  createdBy   User   @relation("VenueOrganizationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  venues             Venue[]
+  staff              VenueStaff[]
+  payments           Payment[]
+  hostedSignupEvents SignupEvent[]
+  invitations        Invitation[]
+  venueReservations  VenueReservation[] @relation("VenueReservationVenueOrganizationOwner")
+
+  @@index([createdById])
+  @@index([status])
+  @@map("venue_organizations")
+}
+
+model VenueStaff {
+  id        String           @id @default(cuid())
+  role      VenueStaffRole   @default(VIEWER)
+  status    VenueStaffStatus @default(INVITED)
+  joinedAt  DateTime?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  organizationId String
+  organization   VenueOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  venueId String?
+  venue   Venue?  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("VenueStaffUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  invitedById String?
+  invitedBy   User?   @relation("VenueStaffInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, venueId, userId])
+  @@index([userId])
+  @@index([organizationId, role])
+  @@index([venueId])
+  @@map("venue_staff")
+}
+
+model Venue {
+  id                  String             @id @default(cuid())
+  name                String
+  address             String?
+  city                String?
+  state               String?
+  zipCode             String?
+  surfaceType         SurfaceType        @default(OTHER)
+  capacity            Int?
+  amenities           String[] // e.g., ["locker_rooms", "parking", "pro_shop", "scoreboard"]
+  phone               String?
+  website             String?
+  notes               String?
+  visibility          VenueVisibility    @default(PUBLIC)
+  isActive            Boolean            @default(true)
+  slug                String?            @unique
+  publicDescription   String?
+  logoUrl             String?
+  brandPrimaryColor   String?
+  brandSecondaryColor String?
+  timezone            String             @default("America/New_York")
+  publicEmail         String?
+  publicPhone         String?
+  privateManagerNotes String?
+  // Optional schematic layout (feature 006): { surfaces: [{surfaceId,x,y,w,h,rotation}],
+  // labels: [{text,x,y}] }. Presentational only — never drives availability.
+  layout              Json?
+  profileStatus       VenueProfileStatus @default(DRAFT)
+  publishedAt         DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  organizationId String?
+  organization   VenueOrganization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Ownership — at most one of these is set
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  events            Event[]
+  staff             VenueStaff[]
+  surfaces          VenueSurface[]
+  operatingHours    VenueOperatingHour[]
+  scheduleBlocks    VenueScheduleBlock[]
+  surfaceTimeRequests   SurfaceTimeRequest[]
+  lessonOfferings   LessonOffering[]
+  contentPosts      VenueContentPost[]
+  relationships     VenueRelationship[]
+  activityLogs      VenueActivityLog[]
+  registrations     SessionRegistration[]
+  payments          Payment[]
+  signupEvents      SignupEvent[]
+  seasonGames       SeasonGame[]
+  proposalEntries   GameProposalEntry[]
+  venueReservations VenueReservation[]
+  raceRounds        RaceRound[]
+  raceSessions      RaceSession[]
+
+  @@index([visibility])
+  @@index([teamId])
+  @@index([leagueId])
+  @@index([organizationId])
+  @@index([profileStatus])
+  @@index([surfaceType])
+  @@map("venues")
+}
+
+model VenueSurface {
+  id           String      @id @default(cuid())
+  name         String
+  surfaceType  SurfaceType @default(CIRCUIT)
+  capacity     Int?
+  isDefault    Boolean     @default(false)
+  isActive     Boolean     @default(true)
+  displayOrder Int         @default(0)
+  notes        String?
+  // Display name for the implicit whole-surface segment ("Full circuit");
+  // null = surface-type default. Bookings with segmentId null are whole-surface.
+  wholeLabel   String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  operatingHours          VenueOperatingHour[]
+  scheduleBlocks          VenueScheduleBlock[]
+  lessonOfferings         LessonOffering[]
+  signupEvents            SignupEvent[]        @relation("SignupEventSurfaces")
+  eventGames              EventGame[]
+  seasonGames             SeasonGame[]
+  segments                SurfaceSegment[]
+  venueReservations       VenueReservation[]
+  approvedSurfaceTimeRequests SurfaceTimeRequest[]     @relation("SurfaceTimeRequestApprovedSurface")
+  raceSessions            RaceSession[]
+
+  @@unique([venueId, name])
+  @@index([venueId, isActive])
+  @@map("venue_surfaces")
+}
+
+enum SegmentKind {
+  HALF
+  CROSS
+  CUSTOM
+}
+
+// A named, bookable subdivision of a surface, authored by drawing on the
+// surface schematic. Geometry is authoring input + display only; the
+// SegmentCoexistence rows are the sole source of conflict truth
+// ("geometry proposes, declarations decide"). Whole-surface bookings use
+// segmentId: null — there is no WHOLE segment row.
+model SurfaceSegment {
+  id         String      @id @default(cuid())
+  name       String
+  kind       SegmentKind @default(CUSTOM)
+  // Stable preset identity ("HALF_A", "CROSS_3"); null for custom zones.
+  // Preset re-application matches by role, so renames never duplicate.
+  presetRole String?
+  isActive   Boolean     @default(true)
+  // Normalized (0-1) rect on the surface schematic: {x, y, w, h, rotation}.
+  geometry   Json
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  surfaceId String
+  surface   VenueSurface @relation(fields: [surfaceId], references: [id], onDelete: Cascade)
+
+  coexistenceA SegmentCoexistence[] @relation("CoexistA")
+  coexistenceB SegmentCoexistence[] @relation("CoexistB")
+
+  seasonGames             SeasonGame[]
+  eventGames              EventGame[]
+  scheduleBlocks          VenueScheduleBlock[]
+  venueReservations       VenueReservation[]
+  approvedSurfaceTimeRequests SurfaceTimeRequest[]     @relation("SurfaceTimeRequestApprovedSegment")
+  raceSessions            RaceSession[]
+
+  @@unique([surfaceId, name])
+  @@unique([surfaceId, presetRole])
+  @@index([surfaceId, isActive])
+  @@map("surface_segments")
+}
+
+// Presence-only symmetric coexistence: a row means the pair may operate
+// simultaneously; absence means conflict (safe default). Canonical ordering
+// segmentAId < segmentBId (application code + DB CHECK).
+model SegmentCoexistence {
+  id String @id @default(cuid())
+
+  segmentAId String
+  segmentA   SurfaceSegment @relation("CoexistA", fields: [segmentAId], references: [id], onDelete: Cascade)
+  segmentBId String
+  segmentB   SurfaceSegment @relation("CoexistB", fields: [segmentBId], references: [id], onDelete: Cascade)
+
+  @@unique([segmentAId, segmentBId])
+  @@map("segment_coexistences")
+}
+
+model VenueOperatingHour {
+  id                 String              @id @default(cuid())
+  dayOfWeek          Int
+  opensAt            String
+  closesAt           String
+  effectiveStartDate DateTime
+  effectiveEndDate   DateTime?
+  status             OperatingHourStatus @default(OPEN)
+  label              String?
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  surfaceId String?
+  surface   VenueSurface? @relation(fields: [surfaceId], references: [id], onDelete: Cascade)
+
+  @@index([venueId, dayOfWeek])
+  @@index([surfaceId, dayOfWeek])
+  @@map("venue_operating_hours")
+}
+
+model VenueScheduleBlock {
+  id                      String                    @id @default(cuid())
+  title                   String
+  description             String?
+  activityType            VenueScheduleActivityType
+  audience                VenueScheduleAudience     @default(PUBLIC)
+  visibility              VenueScheduleVisibility   @default(PUBLIC)
+  status                  VenueScheduleBlockStatus  @default(DRAFT)
+  intent                  VenueScheduleBlockIntent
+  startsAt                DateTime
+  endsAt                  DateTime
+  recurrenceRule          String?
+  recurrenceStartDate     DateTime?
+  recurrenceEndDate       DateTime?
+  capacity                Int?
+  priceAmount             Int?
+  priceCurrency           String                    @default("USD")
+  priceLabel              String?
+  registrationMode        RegistrationMode          @default(INFO_ONLY)
+  externalRegistrationUrl String?
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  surfaceId String?
+  surface   VenueSurface? @relation(fields: [surfaceId], references: [id], onDelete: SetNull)
+
+  // null = whole surface (or venue-wide when surfaceId is also null).
+  segmentId String?
+  segment   SurfaceSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+
+  createdById String
+  createdBy   User   @relation("VenueScheduleBlockCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  updatedById String?
+  updatedBy   User?   @relation("VenueScheduleBlockUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  surfaceTimeRequests        SurfaceTimeRequest[]
+  lessonOfferings        LessonOffering[]
+  skillLevels            SkillLevelReference[]
+  registrations          SessionRegistration[]
+  offeringReservations   VenueReservation[]    @relation("VenueReservationOffering")
+  reservationOccurrences VenueReservation[]    @relation("VenueReservationScheduleBlockSource")
+
+  @@index([venueId, startsAt])
+  @@index([surfaceId, startsAt])
+  @@index([status, visibility])
+  @@index([activityType])
+  @@map("venue_schedule_blocks")
+}
+
+model SurfaceTimeRequest {
+  id                        String               @id @default(cuid())
+  requesterOrganizationName String?
+  contactName               String
+  contactEmail              String
+  contactPhone              String?
+  requestedStartAt          DateTime
+  requestedEndAt            DateTime
+  approvedStartAt           DateTime?
+  approvedEndAt             DateTime?
+  approvedSurfaceId         String?
+  approvedSegmentId         String?
+  notes                     String?
+  status                    SurfaceTimeRequestStatus @default(SUBMITTED)
+  decisionMessage           String?
+  decidedAt                 DateTime?
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
+
+  scheduleBlockId String
+  scheduleBlock   VenueScheduleBlock @relation(fields: [scheduleBlockId], references: [id], onDelete: Cascade)
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  requesterUserId String
+  requesterUser   User   @relation("SurfaceTimeRequester", fields: [requesterUserId], references: [id], onDelete: Cascade)
+
+  requesterTeamId String?
+  requesterTeam   Team?   @relation(fields: [requesterTeamId], references: [id], onDelete: SetNull)
+
+  requesterLeagueId String?
+  requesterLeague   League? @relation(fields: [requesterLeagueId], references: [id], onDelete: SetNull)
+
+  decidedById String?
+  decidedBy   User?   @relation("SurfaceTimeDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  approvedSurface  VenueSurface?       @relation("SurfaceTimeRequestApprovedSurface", fields: [approvedSurfaceId], references: [id], onDelete: SetNull)
+  approvedSegment  SurfaceSegment?   @relation("SurfaceTimeRequestApprovedSegment", fields: [approvedSegmentId], references: [id], onDelete: SetNull)
+  venueReservation VenueReservation?
+
+  @@index([venueId, status])
+  @@index([scheduleBlockId, status])
+  @@index([requesterUserId])
+  @@index([requesterTeamId])
+  @@index([requesterLeagueId])
+  @@index([approvedSurfaceId])
+  @@index([approvedSegmentId])
+  @@map("surface_time_requests")
+}
+
+// The authoritative claim on venue space and time. This is intentionally named
+// VenueReservation to preserve the boundary from GearReservation custody.
+model VenueReservation {
+  id          String                      @id @default(cuid())
+  status      VenueReservationStatus
+  usageStatus VenueReservationUsageStatus @default(PENDING)
+  startsAt    DateTime
+  endsAt      DateTime
+  timezone    String                      @default("America/New_York")
+  heldUntil   DateTime?
+  confirmedAt DateTime?
+  releasedAt  DateTime?
+  canceledAt  DateTime?
+  completedAt DateTime?
+  createdAt   DateTime                    @default(now())
+  updatedAt   DateTime                    @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Restrict)
+
+  // Null surface is an intentional venue-wide claim and conflicts with every
+  // surface and segment at the venue.
+  surfaceId String?
+  surface   VenueSurface? @relation(fields: [surfaceId], references: [id], onDelete: Restrict)
+
+  segmentId String?
+  segment   SurfaceSegment? @relation(fields: [segmentId], references: [id], onDelete: Restrict)
+
+  ownerLeagueId String?
+  ownerLeague   League? @relation("VenueReservationLeagueOwner", fields: [ownerLeagueId], references: [id], onDelete: Restrict)
+
+  ownerTeamId String?
+  ownerTeam   Team?   @relation("VenueReservationTeamOwner", fields: [ownerTeamId], references: [id], onDelete: Restrict)
+
+  ownerVenueOrganizationId String?
+  ownerVenueOrganization   VenueOrganization? @relation("VenueReservationVenueOrganizationOwner", fields: [ownerVenueOrganizationId], references: [id], onDelete: Restrict)
+
+  sourceRequestId String?         @unique
+  sourceRequest   SurfaceTimeRequest? @relation(fields: [sourceRequestId], references: [id], onDelete: SetNull)
+
+  offeringBlockId String?
+  offeringBlock   VenueScheduleBlock? @relation("VenueReservationOffering", fields: [offeringBlockId], references: [id], onDelete: SetNull)
+
+  sourceScheduleBlockId String?
+  sourceScheduleBlock   VenueScheduleBlock? @relation("VenueReservationScheduleBlockSource", fields: [sourceScheduleBlockId], references: [id], onDelete: SetNull)
+
+  createdById String
+  createdBy   User   @relation("VenueReservationCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  assignedById String?
+  assignedBy   User?   @relation("VenueReservationAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  transitions      VenueReservationTransition[]
+  overrides        VenueReservationOverride[]
+  events           Event[]
+  seasonGames      SeasonGame[]
+  eventGames       EventGame[]
+  signupEvents     SignupEvent[]
+  proposalEntries  GameProposalEntry[]
+  raceSessions     RaceSession[]
+
+  @@unique([sourceScheduleBlockId, startsAt])
+  @@index([venueId, startsAt, endsAt])
+  @@index([surfaceId, startsAt, endsAt])
+  @@index([segmentId, startsAt, endsAt])
+  @@index([ownerLeagueId, status, startsAt])
+  @@index([ownerTeamId, status, startsAt])
+  @@index([ownerVenueOrganizationId, status, startsAt])
+  @@index([status, heldUntil])
+  @@map("venue_reservations")
+}
+
+model VenueReservationTransition {
+  id             String                  @id @default(cuid())
+  previousStatus VenueReservationStatus?
+  nextStatus     VenueReservationStatus
+  reason         String?
+  snapshot       Json?
+  occurredAt     DateTime                @default(now())
+
+  reservationId String
+  reservation   VenueReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  actorId String?
+  actor   User?   @relation("VenueReservationTransitionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([reservationId, occurredAt])
+  @@map("venue_reservation_transitions")
+}
+
+model VenueReservationOverride {
+  id                        String   @id @default(cuid())
+  reason                    String
+  candidateSnapshot         Json
+  conflictingReservationIds String[]
+  occurredAt                DateTime @default(now())
+
+  reservationId String
+  reservation   VenueReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  actorId String?
+  actor   User?   @relation("VenueReservationOverrideActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([reservationId, occurredAt])
+  @@map("venue_reservation_overrides")
+}
+
+model LessonOffering {
+  id                      String               @id @default(cuid())
+  title                   String
+  description             String?
+  lessonType              LessonOfferingType
+  instructorName          String?
+  priceAmount             Int?
+  priceCurrency           String               @default("USD")
+  durationMinutes         Int?
+  availabilityDescription String?
+  registrationMode        RegistrationMode     @default(INFO_ONLY)
+  externalRegistrationUrl String?
+  status                  LessonOfferingStatus @default(DRAFT)
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  surfaceId String?
+  surface   VenueSurface? @relation(fields: [surfaceId], references: [id], onDelete: SetNull)
+
+  scheduleBlocks VenueScheduleBlock[]
+  skillLevels    SkillLevelReference[]
+  registrations  SessionRegistration[]
+
+  @@index([venueId, status])
+  @@index([lessonType])
+  @@map("lesson_offerings")
+}
+
+model VenueContentPost {
+  id           String                 @id @default(cuid())
+  title        String
+  slug         String
+  excerpt      String?
+  body         String
+  status       VenueContentPostStatus @default(DRAFT)
+  publishedAt  DateTime?
+  scheduledFor DateTime?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  authorId String
+  author   User   @relation("VenueContentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@unique([venueId, slug])
+  @@index([venueId, status])
+  @@map("venue_content_posts")
+}
+
+model VenueRelationship {
+  id               String                      @id @default(cuid())
+  relationshipType VenueRelationshipType
+  targetType       VenueRelationshipTargetType
+  targetName       String?
+  invitedEmail     String?
+  status           VenueRelationshipStatus     @default(PENDING)
+  expiresAt        DateTime?
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+
+  invitedById String
+  invitedBy   User   @relation("VenueRelationshipInviter", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  acceptedById String?
+  acceptedBy   User?   @relation("VenueRelationshipAccepter", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  removedById String?
+  removedBy   User?   @relation("VenueRelationshipRemover", fields: [removedById], references: [id], onDelete: SetNull)
+
+  @@index([venueId, status])
+  @@index([teamId, status])
+  @@index([leagueId, status])
+  @@map("venue_relationships")
+}
+
+model SkillLevelReference {
+  id          String               @id @default(cuid())
+  source      SkillLevelSource
+  discipline  SkillLevelDiscipline
+  label       String
+  description String?
+  sortOrder   Int?
+  isActive    Boolean              @default(true)
+
+  scheduleBlocks  VenueScheduleBlock[]
+  lessonOfferings LessonOffering[]
+
+  @@unique([source, discipline, label])
+  @@index([discipline, isActive])
+  @@map("skill_level_references")
+}
+
+model VenueActivityLog {
+  id           String   @id @default(cuid())
+  action       String
+  resourceType String
+  resourceId   String?
+  summary      String
+  details      Json?
+  createdAt    DateTime @default(now())
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  actorId String
+  actor   User   @relation("VenueActivityActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([venueId, createdAt])
+  @@index([actorId])
+  @@index([action])
+  @@map("venue_activity_logs")
+}
+
+model SessionRegistration {
+  id               String                    @id @default(cuid())
+  status           SessionRegistrationStatus @default(PENDING)
+  // Snapshot of participant details at registration time.
+  participantName  String
+  participantEmail String
+  participantPhone String?
+  skillLevelNote   String?
+  notes            String?
+  quantity         Int                       @default(1)
+  // Price snapshot in the smallest currency unit (cents). amountTotal = unitAmount * quantity.
+  unitAmount       Int                       @default(0)
+  amountTotal      Int                       @default(0)
+  currency         String                    @default("USD")
+  confirmedAt      DateTime?
+  canceledAt       DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  venueId String
+  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  // Exactly one of scheduleBlockId / lessonOfferingId is set.
+  scheduleBlockId String?
+  scheduleBlock   VenueScheduleBlock? @relation(fields: [scheduleBlockId], references: [id], onDelete: Cascade)
+
+  lessonOfferingId String?
+  lessonOffering   LessonOffering? @relation(fields: [lessonOfferingId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("SessionRegistrant", fields: [userId], references: [id], onDelete: Cascade)
+
+  canceledById String?
+  canceledBy   User?   @relation("SessionRegistrationCanceler", fields: [canceledById], references: [id], onDelete: SetNull)
+
+  payment Payment?
+
+  @@index([venueId, status])
+  @@index([scheduleBlockId, status])
+  @@index([lessonOfferingId, status])
+  @@index([userId])
+  @@map("session_registrations")
+}
+
+model Payment {
+  id                      String        @id @default(cuid())
+  status                  PaymentStatus @default(REQUIRES_PAYMENT)
+  amount                  Int // gross amount charged in cents
+  currency                String        @default("USD")
+  applicationFeeAmount    Int           @default(0)
+  refundedAmount          Int           @default(0)
+  // Stripe identifiers. The charge lives on the connected account.
+  stripeAccountId         String?
+  stripeCheckoutSessionId String?       @unique
+  stripePaymentIntentId   String?       @unique
+  receiptUrl              String?
+  failureReason           String?
+  paidAt                  DateTime?
+  refundedAt              DateTime?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  // Exactly one of registrationId / eventRegistrationId is set (DB CHECK constraint).
+  registrationId String?              @unique
+  registration   SessionRegistration? @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  eventRegistrationId String?            @unique
+  eventRegistration   EventRegistration? @relation(fields: [eventRegistrationId], references: [id], onDelete: Cascade)
+
+  // Merchant of record — exactly one of organizationId / leagueId is set (DB CHECK
+  // constraint); venueId only accompanies organizationId.
+  venueId String?
+  venue   Venue?  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  organizationId String?
+  organization   VenueOrganization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([venueId, status])
+  @@index([leagueId, status])
+  @@index([stripePaymentIntentId])
+  @@map("payments")
+}
+
+// ============================================================================
+// Season & Game Scheduling (feature 005-season-scheduling)
+// ============================================================================
+
+// Optional descriptive schedule format. Only ROUND_ROBIN has a generator;
+// all other values are labels — the system never pretends to generate them.
+enum ScheduleFormat {
+  ROUND_ROBIN
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  POOL_PLAY
+  LADDER
+  CUSTOM
+}
+
+enum SeasonPhaseType {
+  PRE_SEASON
+  REGULAR_SEASON
+  PLAYOFFS
+  CUSTOM
+}
+
+enum SeasonGameStatus {
+  DRAFT // unpublished; no calendar Event exists yet
+  SCHEDULED
+  COMPLETED
+  CANCELED
+}
+
+enum GameProposalStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+  EXPIRED // latest proposed start passed without acceptance
+}
+
+enum GameProposalEntryKind {
+  PROPOSE
+  COUNTER
+  ACCEPT
+  DECLINE
+  WITHDRAW
+}
+
+enum SeasonScheduleVisibility {
+  PUBLIC
+  AUTHENTICATED
+  RELATIONSHIP_ONLY
+  PRIVATE
+}
+
+// A scheduling container ("Fall 2026") owned by a league or a standalone
+// team (exactly one — DB CHECK constraint). Format is never required.
+model Season {
+  id          String    @id @default(cuid())
+  name        String
+  description String?
+  startDate   DateTime
+  endDate     DateTime
+  archivedAt  DateTime? // hides from default views; games untouched
+
+  format       ScheduleFormat?
+  formatRounds Int?
+  scheduleVisibility SeasonScheduleVisibility @default(PRIVATE)
+
+  leagueId String?
+  league   League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  teamId String?
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  createdById String
+  createdBy   User     @relation("SeasonCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  phases     SeasonPhase[]
+  games      SeasonGame[]
+  placements PlacementDecision[]
+  teamPlacements SeasonTeamPlacement[]
+  proposals  GameProposal[]
+  raceRounds RaceRound[]
+
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants AssociationRoleGrant[]
+  invitationGrants      Invitation[]          @relation("InvitationAssociationSeason")
+  @@index([leagueId, startDate])
+  @@index([teamId, startDate])
+  @@map("seasons")
+}
+
+// Ordered subdivision of a season (pre-season, regular season, playoffs).
+// A season without phases behaves as a single implicit phase.
+model SeasonPhase {
+  id        String          @id @default(cuid())
+  name      String
+  type      SeasonPhaseType @default(CUSTOM)
+  sortOrder Int             @default(0)
+  startDate DateTime
+  endDate   DateTime
+
+  format       ScheduleFormat?
+  formatRounds Int?
+
+  seasonId String
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  games SeasonGame[]
+
+  @@index([seasonId, sortOrder])
+  @@map("season_phases")
+}
+
+// A scheduled matchup between two real teams. Publishing creates a calendar
+// Event (home-team anchored) with RSVPs for both rosters; DRAFT games have
+// no calendar presence.
+model SeasonGame {
+  id       String           @id @default(cuid())
+  status   SeasonGameStatus @default(DRAFT)
+  startAt  DateTime
+  endAt    DateTime
+  timezone String           @default("America/New_York")
+
+  venueId      String?
+  venue        Venue?          @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  surfaceId    String?
+  surface      VenueSurface?     @relation(fields: [surfaceId], references: [id], onDelete: SetNull)
+  // null when the sport's capability catalog defines no surface-usage options
+  // null = whole surface; segment must belong to the selected surface.
+  segmentId    String?
+  segment      SurfaceSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  locationText String? // free text when no venue selected
+
+  homeTeamId String
+  homeTeam   Team   @relation("SeasonGameHome", fields: [homeTeamId], references: [id], onDelete: Cascade)
+  awayTeamId String
+  awayTeam   Team   @relation("SeasonGameAway", fields: [awayTeamId], references: [id], onDelete: Cascade)
+
+  // Writable only when the derived age level is stats-eligible (division-based)
+  homeScore Int?
+  awayScore Int?
+  notes     String?
+
+  // Recorded venue-conflict override
+  conflictOverriddenById String?
+  conflictOverriddenBy   User?     @relation("SeasonGameConflictOverride", fields: [conflictOverriddenById], references: [id], onDelete: SetNull)
+  conflictOverriddenAt   DateTime?
+
+  seasonId String
+  season   Season       @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  phaseId  String?
+  phase    SeasonPhase? @relation(fields: [phaseId], references: [id], onDelete: SetNull)
+
+  eventId String? @unique
+  event   Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  venueReservationId String?           @unique
+  venueReservation   VenueReservation? @relation(fields: [venueReservationId], references: [id], onDelete: SetNull)
+
+  proposalId String?       @unique
+  proposal   GameProposal? @relation(fields: [proposalId], references: [id])
+
+  createdById String
+  createdBy   User     @relation("SeasonGameCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([seasonId, startAt])
+  @@index([phaseId, startAt])
+  @@index([homeTeamId, startAt])
+  @@index([awayTeamId, startAt])
+  @@index([venueId, startAt])
+  @@index([surfaceId, startAt])
+  @@index([venueReservationId])
+  @@map("season_games")
+}
+
+// A same-league negotiation thread between two teams for a prospective game.
+// Current terms live on the latest PROPOSE/COUNTER entry; that entry's
+// startAt drives expiry.
+model GameProposal {
+  id     String             @id @default(cuid())
+  status GameProposalStatus @default(PENDING)
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  proposingTeamId String
+  proposingTeam   Team   @relation("ProposalsSent", fields: [proposingTeamId], references: [id], onDelete: Cascade)
+  receivingTeamId String
+  receivingTeam   Team   @relation("ProposalsReceived", fields: [receivingTeamId], references: [id], onDelete: Cascade)
+
+  seasonId String?
+  season   Season? @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  phaseId  String? // resolved at accept time
+
+  createdById String
+  createdBy   User      @relation("GameProposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  resolvedAt  DateTime?
+
+  entries       GameProposalEntry[]
+  resultingGame SeasonGame?
+
+  @@index([receivingTeamId, status])
+  @@index([proposingTeamId, status])
+  @@index([leagueId, status])
+  @@map("game_proposals")
+}
+
+// Append-only negotiation log entry. Terms are set on PROPOSE/COUNTER and
+// null on ACCEPT/DECLINE/WITHDRAW.
+model GameProposalEntry {
+  id   String                @id @default(cuid())
+  kind GameProposalEntryKind
+
+  startAt DateTime?
+  endAt   DateTime?
+  venueId String?
+  venue   Venue?    @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  note    String?
+
+  proposalId String
+  proposal   GameProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+
+  actorTeamId String
+  actorUserId String
+  actorUser   User     @relation("GameProposalActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  venueReservationId String?           @unique
+  venueReservation   VenueReservation? @relation(fields: [venueReservationId], references: [id], onDelete: SetNull)
+
+  @@index([proposalId, createdAt])
+  @@index([venueReservationId])
+  @@map("game_proposal_entries")
+}
+
+// A recorded league-admin placement action. Append-only; the latest decision
+// per (seasonId, teamId) is current. Team.divisionId is updated in the same
+// transaction. privateNote is visible to league admins only.
+model PlacementDecision {
+  id String @id @default(cuid())
+
+  seasonId String
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  teamId   String
+  team     Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  divisionId String?
+  division   Division? @relation(fields: [divisionId], references: [id], onDelete: SetNull)
+
+  rank        Int? // manual ordering for sub-threshold age levels
+  privateNote String?
+
+  decidedById String
+  decidedBy   User     @relation("PlacementDecider", fields: [decidedById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  @@index([seasonId, teamId, createdAt])
+  @@map("placement_decisions")
+}
+
+// Mutable current placement projection for one season/team pair. Placement
+// history remains in PlacementDecision; snapshots keep season labels stable
+// when teams or divisions are renamed later.
+model SeasonTeamPlacement {
+  id String @id @default(cuid())
+
+  seasonId String
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  teamId   String
+  team     Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  divisionId         String?
+  division           Division? @relation(fields: [divisionId], references: [id], onDelete: SetNull)
+  teamNameSnapshot   String
+  divisionNameSnapshot String?
+  rank               Int?
+  privateNote        String?
+
+  placedById String
+  placedBy   User   @relation("SeasonPlacementActor", fields: [placedById], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([seasonId, teamId])
+  @@index([seasonId, divisionId])
+  @@index([seasonId, rank])
+  @@map("season_team_placements")
+}
+
+// ============================================================================
+// Signup Events & Event Day Management (feature 004-signup-events)
+// ============================================================================
+
+enum SignupEventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELED
+  COMPLETED
+}
+
+enum SignupEventVisibility {
+  PRIVATE // host organizers/managers only
+  INVITE_ONLY // invitees (EventInvitation) only
+  LINK // anyone holding linkToken
+  PUBLIC // listed on host/venue pages and discovery
+}
+
+enum SignupEventCategory {
+  CLINIC
+  SCRIMMAGE
+  TRYOUT
+  VOLUNTEER
+  FUNDRAISER
+  TOURNAMENT
+  SOCIAL
+  OTHER
+}
+
+// Ordered ranks; game scores/stats allowed at/above STATS_MIN_AGE_LEVEL
+// (default U10 — no stats at U8 and below).
+enum AgeClassification {
+  U6
+  U8
+  U10
+  U12
+  U14
+  U16
+  U18
+  JUNIOR
+  ADULT
+  OPEN
+}
+
+enum EventRegistrationStatus {
+  PENDING_PAYMENT // held spot awaiting online payment (30-min hold window)
+  CONFIRMED
+  WAITLISTED // ordered by waitlistJoinedAt
+  OFFERED // promoted from waitlist; holds a spot until offerExpiresAt
+  CANCELED
+  EXPIRED // lapsed payment hold or lapsed waitlist offer
+  REFUNDED
+}
+
+enum ManualPaymentStatus {
+  NOT_REQUIRED
+  UNPAID
+  PAID
+  WAIVED
+}
+
+enum PhaseAudience {
+  HOST_MEMBERS // members of the hosting league/team/organization
+  SELECTED_GROUPS // linked divisions/teams
+  INVITEES // EventInvitation holders
+  EVERYONE // anyone with view access
+}
+
+enum EventInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+enum EventGameStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELED
+}
+
+enum EventMediaKind {
+  PHOTO
+  VIDEO
+}
+
+enum EventMediaStatus {
+  ACTIVE
+  FLAGGED // reported, pending organizer review; hidden from non-organizers
+  REMOVED
+}
+
+enum GalleryVisibility {
+  PARTICIPANTS // registrants + organizers (default)
+  EVENT_AUDIENCE // whoever can view the event (per visibility tier)
+}
+
+// A hosted signup event (Mite Night, clinic, tryout, tournament, volunteer
+// signup…) with capacity-limited role slots. Distinct from team calendar
+// Events (roster RSVPs) and VenueScheduleBlocks (venue schedule).
+model SignupEvent {
+  id                String                @id @default(cuid())
+  title             String
+  description       String?
+  category          SignupEventCategory   @default(OTHER)
+  ageClassification AgeClassification     @default(OPEN)
+  status            SignupEventStatus     @default(DRAFT)
+  visibility        SignupEventVisibility @default(PRIVATE)
+  // 32-byte crypto-random hex; set while visibility = LINK; regenerable.
+  linkToken         String?               @unique
+
+  startAt      DateTime
+  endAt        DateTime
+  // Display timezone, copied from the venue (or host default) when set.
+  timezone     String   @default("America/New_York")
+  locationText String?
+
+  registrationOpensAt  DateTime?
+  registrationClosesAt DateTime?
+  // Self-service cancellation cutoff for registrants (managers are exempt).
+  cancellationCutoffAt DateTime?
+
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+
+  // Payment configuration. Online requires the host merchant to be onboarded.
+  acceptsOnlinePayment Boolean @default(false)
+  acceptsManualPayment Boolean @default(true)
+  venmoHandle          String?
+  zelleHandle          String?
+  cashAppHandle        String?
+  paymentPhone         String?
+  paymentInstructions  String?
+
+  galleryEnabled    Boolean           @default(true)
+  galleryVisibility GalleryVisibility @default(PARTICIPANTS)
+  // Opt-in public roster (first name + last initial only on public views).
+  publicRoster      Boolean           @default(false)
+
+  publishedAt      DateTime?
+  canceledAt       DateTime?
+  // When set, event teams/games are visible to participants (organizers can
+  // build rosters privately before posting them).
+  teamsPublishedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Exactly one hosting entity is set (DB CHECK constraint).
+  hostOrganizationId String?
+  hostOrganization   VenueOrganization? @relation(fields: [hostOrganizationId], references: [id], onDelete: Cascade)
+
+  hostLeagueId String?
+  hostLeague   League? @relation(fields: [hostLeagueId], references: [id], onDelete: Cascade)
+
+  hostTeamId String?
+  hostTeam   Team?   @relation(fields: [hostTeamId], references: [id], onDelete: Cascade)
+
+  venueId String?
+  venue   Venue?  @relation(fields: [venueId], references: [id], onDelete: SetNull)
+
+  surfaces VenueSurface[] @relation("SignupEventSurfaces")
+
+  createdById String
+  createdBy   User   @relation("SignupEventCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  updatedById String?
+  updatedBy   User?   @relation("SignupEventUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  venueReservationId String?           @unique
+  venueReservation   VenueReservation? @relation(fields: [venueReservationId], references: [id], onDelete: SetNull)
+
+  slots         SignupSlot[]
+  phases        EventRegistrationPhase[]
+  registrations EventRegistration[]
+  invitations   EventInvitation[]
+  managers      EventManager[]
+  teams         EventTeam[]
+  games         EventGame[]
+  media         EventMediaItem[]
+
+
+  // Feature 007 US3 — scoped responsibilities and volunteers.
+  associationRoleGrants AssociationRoleGrant[]
+  volunteerNeeds        VolunteerNeed[]
+  invitationGrants      Invitation[]          @relation("InvitationAssociationSignupEvent")
+  @@index([hostOrganizationId, startAt])
+  @@index([hostLeagueId, startAt])
+  @@index([hostTeamId, startAt])
+  @@index([venueId, startAt])
+  @@index([status, visibility, startAt])
+  @@index([venueReservationId])
+  @@map("signup_events")
+}
+
+// A named, capacity-limited role within an event (Marshal, Scrutineer, Flag post,
+// Coach, Volunteer…). Capacity is enforced per slot at confirmation time.
+model SignupSlot {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  sortOrder       Int      @default(0)
+  // null = unlimited. Reducing below the confirmed count never revokes
+  // registrations; it only blocks new ones.
+  capacity        Int?
+  // Price in cents; null or 0 = free.
+  priceAmount     Int?
+  priceCurrency   String   @default("USD")
+  waitlistEnabled Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  registrations EventRegistration[]
+
+  @@index([eventId, sortOrder])
+  @@map("signup_slots")
+}
+
+// Ordered access window controlling when a given audience may register.
+// Eligibility is evaluated at request time; no scheduler mutates phases.
+model EventRegistrationPhase {
+  id        String        @id @default(cuid())
+  name      String
+  opensAt   DateTime
+  audience  PhaseAudience
+  sortOrder Int           @default(0)
+  createdAt DateTime      @default(now())
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  // Populated when audience = SELECTED_GROUPS.
+  divisions Division[] @relation("PhaseDivisions")
+  teams     Team[]     @relation("PhaseTeams")
+
+  @@index([eventId, opensAt])
+  @@map("event_registration_phases")
+}
+
+// One named participant's claim on one slot — including waitlist entries and
+// offers. The registrant (User) is the contact of record; participants (e.g.
+// children) need no account.
+model EventRegistration {
+  id     String                  @id @default(cuid())
+  status EventRegistrationStatus @default(CONFIRMED)
+
+  // Participant snapshot at registration time.
+  participantName  String
+  participantEmail String?
+  participantPhone String?
+  notes            String?
+  // Organizer-set: may rotate through multiple games regardless of team.
+  isFloater        Boolean @default(false)
+
+  // Price snapshot in cents at registration time (never from the client).
+  unitAmount Int    @default(0)
+  currency   String @default("USD")
+
+  manualPaymentStatus     ManualPaymentStatus @default(NOT_REQUIRED)
+  manualPaymentMarkedById String?
+  manualPaymentMarkedBy   User?               @relation("ManualPaymentMarker", fields: [manualPaymentMarkedById], references: [id], onDelete: SetNull)
+
+  waitlistJoinedAt DateTime? // FIFO ordering key while WAITLISTED
+  offerExpiresAt   DateTime? // set while OFFERED
+
+  confirmedAt DateTime?
+  canceledAt  DateTime?
+  checkedInAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  slotId String
+  slot   SignupSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+
+  registrantId String
+  registrant   User   @relation("EventRegistrant", fields: [registrantId], references: [id], onDelete: Cascade)
+
+  // Optional link to a roster player (origin team/level context for team formation).
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  checkedInById String?
+  checkedInBy   User?   @relation("EventCheckInActor", fields: [checkedInById], references: [id], onDelete: SetNull)
+
+  canceledById String?
+  canceledBy   User?   @relation("EventRegistrationCanceler", fields: [canceledById], references: [id], onDelete: SetNull)
+
+  payment            Payment?
+  teamAssignment     EventTeamAssignment?
+  gameParticipations EventGameParticipant[]
+  gameStats          PlayerGameStat[]
+
+  @@index([eventId, status])
+  @@index([slotId, status, waitlistJoinedAt])
+  @@index([registrantId])
+  @@map("event_registrations")
+}
+
+// Email-bound invitation to view/register; the access mechanism for
+// INVITE_ONLY events.
+model EventInvitation {
+  id         String                @id @default(cuid())
+  email      String
+  token      String                @unique
+  status     EventInvitationStatus @default(PENDING)
+  expiresAt  DateTime // event startAt
+  sentAt     DateTime              @default(now())
+  acceptedAt DateTime?
+  revokedAt  DateTime?
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  invitedUserId String?
+  invitedUser   User?   @relation("EventInvitee", fields: [invitedUserId], references: [id], onDelete: SetNull)
+
+  invitedById String
+  invitedBy   User   @relation("EventInviter", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, email])
+  @@index([invitedUserId])
+  @@map("event_invitations")
+}
+
+// Per-event management grant (mite delegate, event coordinator…). Host-entity
+// admins are implicit managers and need no row.
+model EventManager {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("EventManagerUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  grantedById String
+  grantedBy   User   @relation("EventManagerGrantor", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, userId])
+  @@map("event_managers")
+}
+
+// Organizer-created team within an event (Red, White, House Gold…).
+model EventTeam {
+  id        String   @id @default(cuid())
+  name      String
+  colorHex  String?
+  sortOrder Int      @default(0)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  assignments        EventTeamAssignment[]
+  homeGames          EventGame[]            @relation("EventGameHome")
+  awayGames          EventGame[]            @relation("EventGameAway")
+  gameParticipations EventGameParticipant[]
+
+  @@unique([eventId, name])
+  @@map("event_teams")
+}
+
+// A participant's primary team assignment (at most one per event).
+model EventTeamAssignment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  eventTeamId String
+  eventTeam   EventTeam @relation(fields: [eventTeamId], references: [id], onDelete: Cascade)
+
+  registrationId String            @unique
+  registration   EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  assignedById String
+  assignedBy   User   @relation("EventTeamAssigner", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@index([eventTeamId])
+  @@map("event_team_assignments")
+}
+
+// A scheduled matchup of two event teams within the event.
+model EventGame {
+  id        String          @id @default(cuid())
+  name      String?
+  status    EventGameStatus @default(SCHEDULED)
+  startAt   DateTime
+  endAt     DateTime
+  // Writable only when isStatsEligible(event.ageClassification).
+  homeScore Int?
+  awayScore Int?
+  notes     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  // Recorded venue-conflict override (unified availability, feature 006)
+  conflictOverriddenById String?
+  conflictOverriddenBy   User?     @relation("EventGameConflictOverride", fields: [conflictOverriddenById], references: [id], onDelete: SetNull)
+  conflictOverriddenAt   DateTime?
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  surfaceId String?
+  surface   VenueSurface? @relation(fields: [surfaceId], references: [id], onDelete: SetNull)
+
+  // null = whole surface; segment must belong to the selected surface.
+  segmentId String?
+  segment   SurfaceSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+
+  venueReservationId String?           @unique
+  venueReservation   VenueReservation? @relation(fields: [venueReservationId], references: [id], onDelete: SetNull)
+
+  homeTeamId String
+  homeTeam   EventTeam @relation("EventGameHome", fields: [homeTeamId], references: [id], onDelete: Cascade)
+
+  awayTeamId String
+  awayTeam   EventTeam @relation("EventGameAway", fields: [awayTeamId], references: [id], onDelete: Cascade)
+
+  participants EventGameParticipant[]
+  stats        PlayerGameStat[]
+
+  @@index([eventId, startAt])
+  @@index([surfaceId, startAt])
+  @@index([venueReservationId])
+  @@map("event_games")
+}
+
+// A participant's inclusion in a specific game's rotation, including which
+// side they compete for in this game (floaters may differ from primary team).
+model EventGameParticipant {
+  id String @id @default(cuid())
+
+  gameId String
+  game   EventGame @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  registrationId String
+  registration   EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  eventTeamId String
+  eventTeam   EventTeam @relation(fields: [eventTeamId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, registrationId])
+  @@map("event_game_participants")
+}
+
+// Basic per-player statistics for age-eligible games.
+model PlayerGameStat {
+  id        String   @id @default(cuid())
+  goals     Int      @default(0)
+  assists   Int      @default(0)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  gameId String
+  game   EventGame @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  registrationId String
+  registration   EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, registrationId])
+  @@map("player_game_stats")
+}
+
+// Uploaded photo/video attached to an event gallery. Held by a lib/storage
+// provider; on S3 the bucket is private and delivery is a short-lived signed
+// URL minted after the gallery authorization check.
+model EventMediaItem {
+  id              String           @id @default(cuid())
+  kind            EventMediaKind
+  storageProvider String           @default("vercel-blob")
+  storageKey      String
+  contentType     String
+  sizeBytes       Int
+  width           Int?
+  height          Int?
+  durationSeconds Int?
+  caption         String?
+  status          EventMediaStatus @default(ACTIVE)
+  reportCount     Int              @default(0)
+  removedAt       DateTime?
+  createdAt       DateTime         @default(now())
+
+  eventId String
+  event   SignupEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  uploaderId String
+  uploader   User   @relation("EventMediaUploader", fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  removedById String?
+  removedBy   User?   @relation("EventMediaRemover", fields: [removedById], references: [id], onDelete: SetNull)
+
+  @@index([eventId, status, createdAt])
+  @@map("event_media_items")
+}
+
+// ---------------------------------------------------------------------------
+// Feature 007 / User Story 3 — scoped responsibilities and volunteers.
+//
+// AssociationRoleGrant is the ONLY source of delegated capability. TeamOfficial
+// is descriptive and never grants anything (spec 007 US3); venue authorization
+// stays in VenueOrganization/VenueStaff and is deliberately not mirrored here.
+// ---------------------------------------------------------------------------
+
+enum AssociationRole {
+  ASSOCIATION_ADMIN
+  SCHEDULER
+  REGISTRAR
+  TREASURER
+  COMMUNICATIONS_LEAD
+  TEAM_MANAGER
+  COACH
+  VOLUNTEER_COORDINATOR
+  EVENT_MANAGER
+  EQUIPMENT_MANAGER
+}
+
+/// The one explicit scope a grant is bounded to. ASSOCIATION means the grant
+/// covers the owning league and sets no narrower target.
+enum AssociationRoleScopeType {
+  ASSOCIATION
+  DIVISION
+  TEAM
+  SEASON
+  EVENT
+  SIGNUP_EVENT
+  RACE_ROUND
+}
+
+enum AssociationRoleGrantState {
+  ACTIVE
+  REVOKED
+}
+
+/// A bounded responsibility delegated to a user. Uniqueness is enforced per
+/// (user, role, scope) among ACTIVE rows only — revoking leaves history behind
+/// and must not block re-granting the same responsibility later.
+model AssociationRoleGrant {
+  id        String                    @id @default(cuid())
+  role      AssociationRole
+  scopeType AssociationRoleScopeType
+  state     AssociationRoleGrantState @default(ACTIVE)
+  notes     String?
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  revokedAt DateTime?
+
+  userId String
+  user   User   @relation("AssociationRoleGrantSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  grantedById String?
+  grantedBy   User?   @relation("AssociationRoleGrantGrantor", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  revokedById String?
+  revokedBy   User?   @relation("AssociationRoleGrantRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  // Owning association. Always set: every grant belongs to exactly one league.
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  // Exactly one of these is set unless scopeType is ASSOCIATION, in which case
+  // none are. Enforced by a num_nonnulls CHECK in the migration.
+  divisionId String?
+  division   Division? @relation(fields: [divisionId], references: [id], onDelete: Cascade)
+
+  teamId String?
+  // Compound FK: a team-scoped grant cannot point at a team in another league.
+  team   Team?   @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Cascade)
+
+  seasonId String?
+  season   Season? @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  eventId String?
+  event   Event?  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  signupEventId String?
+  signupEvent   SignupEvent? @relation(fields: [signupEventId], references: [id], onDelete: Cascade)
+
+  roundId String?
+  round   RaceRound? @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@index([leagueId, state, role])
+  @@index([userId, state])
+  @@index([leagueId, teamId, state])
+  @@map("association_role_grants")
+}
+
+enum VolunteerNeedStatus {
+  OPEN
+  CLOSED
+  CANCELED
+  COMPLETED
+}
+
+/// How a need is filled. INVITE_ONLY is the original behaviour and stays the
+/// default: an organizer names each person. OPEN_SIGNUP is the marshal-post
+/// model, where the need is published and volunteers claim a slot themselves.
+enum VolunteerSignupMode {
+  INVITE_ONLY
+  OPEN_SIGNUP
+}
+
+/// How an assignment came to exist. Kept because "did they volunteer or were
+/// they asked?" is the question a coordinator asks when a shift goes unfilled.
+enum VolunteerAssignmentSource {
+  ASSIGNED
+  SELF_CLAIMED
+  PROMOTED_FROM_WAITLIST
+}
+
+enum VolunteerAssignmentStatus {
+  INVITED
+  ACCEPTED
+  DECLINED
+  CANCELED
+  COMPLETED
+  MISSED
+  /// Claimed a full need. Promoted to ACCEPTED when a slot is released.
+  WAITLISTED
+}
+
+/// What kind of qualification a credential records.
+enum VolunteerCredentialKind {
+  MARSHAL_GRADE
+  LICENCE
+  FIRST_AID
+  SCRUTINEER
+  TRAINING
+}
+
+/// A qualification an association records against one of its people.
+///
+/// Deliberately a *reference*, not a document: a licence number and an expiry
+/// date, never an uploaded certificate. Verifying a governing body's licence is
+/// out of scope (spec 007), and storing scans would pull identity documents
+/// into a system that does not need them and could not be run for free
+/// (ADR-0008). `verifiedBy` records that a named officer sighted the original;
+/// it is a claim about a person, not an adjudication.
+///
+/// Expiry is advisory. A lapsed credential blocks a self-claim and warns an
+/// organizer; it never revokes anything already assigned.
+model VolunteerCredential {
+  id         String                  @id @default(cuid())
+  kind       VolunteerCredentialKind
+  /// The grade or qualification as the issuing body names it: "Post Chief",
+  /// "National B", "First Aid at Work".
+  label      String
+  /// Licence or certificate number, when there is one.
+  reference  String?
+  issuedAt   DateTime?
+  expiresAt  DateTime?
+  notes      String?
+  createdAt  DateTime                @default(now())
+  updatedAt  DateTime                @updatedAt
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation("VolunteerCredentialHolder", fields: [userId], references: [id], onDelete: Cascade)
+
+  verifiedById String?
+  verifiedBy   User?     @relation("VolunteerCredentialVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  verifiedAt   DateTime?
+
+  recordedById String?
+  recordedBy   User?   @relation("VolunteerCredentialRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@unique([leagueId, userId, kind, label])
+  @@index([leagueId, userId])
+  @@index([leagueId, kind, expiresAt])
+  @@map("volunteer_credentials")
+}
+
+/// An association-owned request for volunteer labour, optionally narrowed to a
+/// division, team, or specific activity.
+model VolunteerNeed {
+  id          String              @id @default(cuid())
+  roleLabel   String
+  description String?
+  capacity    Int
+  /// Accepted assignments, denormalized so capacity can be claimed with a
+  /// single conditional updateMany (acceptedCount < capacity) instead of a
+  /// read-then-write race. Never edited directly outside volunteer actions.
+  acceptedCount Int               @default(0)
+  status      VolunteerNeedStatus @default(OPEN)
+  signupMode  VolunteerSignupMode @default(INVITE_ONLY)
+  /// Whether a full need still accepts claims, holding them in order.
+  waitlistEnabled Boolean         @default(true)
+  /// Where the shift is worked, in the organizer's own words: "Post 4 — Turn 3",
+  /// "Paddock gate", "Timing hut". Free text because every circuit names its
+  /// posts differently, and the day sheet groups by exactly this string.
+  postLabel   String?
+  /// When the people on this shift are briefed. Usually before the shift itself.
+  briefingAt  DateTime?
+  /// A qualification somebody must hold, unexpired, to claim this shift.
+  /// Advisory for organizers, who may still assign a trainee alongside an
+  /// experienced marshal — that override is recorded on the assignment.
+  requiredCredentialKind  VolunteerCredentialKind?
+  /// The specific grade or licence wanted, when the kind alone is too broad
+  /// ("Marshal grade" vs "Post Chief"). Matched case-insensitively.
+  requiredCredentialLabel String?
+  startAt     DateTime
+  endAt       DateTime
+  timezone    String
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  canceledAt  DateTime?
+  completedAt DateTime?
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  divisionId String?
+  division   Division? @relation(fields: [divisionId], references: [id], onDelete: SetNull)
+
+  teamId String?
+  // Cascade, not SetNull: the compound FK carries the required leagueId, which
+  // SetNull cannot null. A need scoped to a deleted team has no meaning anyway.
+  team   Team?   @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Cascade)
+
+  eventId String?
+  event   Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  signupEventId String?
+  signupEvent   SignupEvent? @relation(fields: [signupEventId], references: [id], onDelete: SetNull)
+
+  // A need may name the whole weekend or one session of it. A session without
+  // its round is meaningless, so the actions always set both together.
+  roundId String?
+  round   RaceRound? @relation(fields: [roundId], references: [id], onDelete: SetNull)
+
+  sessionId String?
+  session   RaceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("VolunteerNeedCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  assignments VolunteerAssignment[]
+
+  @@index([leagueId, status, startAt])
+  @@index([leagueId, teamId, status])
+  @@index([roundId, status])
+  @@map("volunteer_needs")
+}
+
+/// One volunteer slot against a need. Either a known user or an invited email
+/// address, never both — enforced by CHECK in the migration.
+///
+/// Capacity is enforced by a conditional updateMany against the parent need's
+/// acceptedCount, so two simultaneous acceptances cannot both take the last
+/// slot (ADR-0003 rules out SELECT ... FOR UPDATE).
+model VolunteerAssignment {
+  id           String                    @id @default(cuid())
+  status       VolunteerAssignmentStatus @default(INVITED)
+  source       VolunteerAssignmentSource @default(ASSIGNED)
+  invitedEmail String?
+  notes        String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  respondedAt  DateTime?
+  completedAt  DateTime?
+  /// Signed on at the shift. Distinct from COMPLETED, which is the organizer
+  /// closing the shift out afterwards.
+  checkedInAt  DateTime?
+  /// Acknowledged the briefing for this shift.
+  briefingAckAt DateTime?
+  /// Set when an organizer assigned somebody past this shift's credential
+  /// requirement. Pairing a trainee with an experienced marshal is normal
+  /// practice, so the override is recorded rather than prevented.
+  credentialWaivedAt   DateTime?
+  credentialWaivedById String?
+
+  needId String
+  need   VolunteerNeed @relation(fields: [needId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation("VolunteerAssignmentSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  assignedById String?
+  assignedBy   User?   @relation("VolunteerAssignmentAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  credentialWaivedBy User? @relation("VolunteerAssignmentCredentialWaiver", fields: [credentialWaivedById], references: [id], onDelete: SetNull)
+
+  // Waitlist order is `createdAt`, not a stored position: a stored number would
+  // have to be rewritten on every promotion and could drift from the truth,
+  // while arrival order cannot.
+  //
+  // One person holds at most one live assignment per need. That is a partial
+  // unique index in the migration — Postgres treats the NULL userId of an
+  // email-only invitation as distinct, and Prisma cannot express a partial one.
+  @@index([needId, status])
+  @@index([userId, status])
+  @@index([needId, status, createdAt])
+  @@map("volunteer_assignments")
+}
+
+// ---------------------------------------------------------------------------
+// Feature 007 / User Story 4 — public association and team identity.
+//
+// League.slug already exists (minted when a league publishes its first PUBLIC
+// signup event) and stays the single association slug: adding a second would
+// give /associations/<slug>/events and the new pages divergent identities.
+// ---------------------------------------------------------------------------
+
+/// Publication state for association and team public profiles. Mirrors
+/// VenueProfileStatus rather than reusing it so the two can diverge.
+enum PublicProfileStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+  ARCHIVED
+}
+
+enum PublicContentStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+/// Who may read a content item. MEMBERS_ONLY is never selected by the public
+/// readers; it exists so an association can post to its own people without a
+/// second system.
+enum PublicContentVisibility {
+  PUBLIC
+  MEMBERS_ONLY
+}
+
+/// A slug that used to point somewhere and must keep resolving.
+///
+/// The row stores the *id* of the current target, not its slug, so renames
+/// never build chains and a redirect always lands on whatever the target is
+/// called today. `teamId` null means the row is a retired association slug.
+model PublicSlugRedirect {
+  id        String   @id @default(cuid())
+  slug      String
+  createdAt DateTime @default(now())
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  teamId String?
+  team   Team?   @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Cascade)
+
+  // Association slugs are globally unique, team slugs unique within a league.
+  // Both are partial unique indexes in the migration, because Postgres treats
+  // NULL teamId values as distinct and a plain @@unique would not dedupe them.
+  @@index([leagueId])
+  @@map("public_slug_redirects")
+}
+
+/// An association or team news item / announcement.
+model PublicContentItem {
+  id          String                  @id @default(cuid())
+  slug        String
+  title       String
+  body        String
+  summary     String?
+  status      PublicContentStatus     @default(DRAFT)
+  visibility  PublicContentVisibility @default(PUBLIC)
+  /// When the item becomes readable. Publication is a time-gated read rather
+  /// than a scheduled job, which is what makes it idempotent: nothing has to
+  /// run at the appointed minute.
+  publishAt   DateTime?
+  publishedAt DateTime?
+  archivedAt  DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  leagueId String
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  /// Set for a team news post; null for an association-wide one.
+  teamId String?
+  team   Team?   @relation(fields: [leagueId, teamId], references: [leagueId, id], onDelete: Cascade)
+
+  authorId String?
+  author   User?   @relation("PublicContentAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([leagueId, slug])
+  @@index([leagueId, status, publishAt])
+  @@index([leagueId, teamId, status])
+  @@map("public_content_items")
+}

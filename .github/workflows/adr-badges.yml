@@ -1,0 +1,133 @@
+name: ADR badge reports
+
+# Publishes the two numbers the README badges render: corpus size, from
+# `adrkit lint --json`, and ARB queue depth, from `adrkit queue --format json`.
+# adrkit ships no badge service and no `adrkit badge` command -- both badges are
+# a recipe over JSON it already emits, served from this repository and rendered
+# by shields.io. See ADR-0001 and adrkit's own ADR-0025.
+#
+# Deliberately NOT a `pull_request` workflow and deliberately not a job in
+# `adr.yml`: it holds `contents: write` and pushes to the default branch, which
+# has no business running against untrusted fork code. `adr.yml` stays read-only
+# apart from its one comment step.
+on:
+  push:
+    branches:
+      - main
+    # Only the corpus can change these numbers. Deliberately NOT `.adrkit/**`,
+    # or the workflow's own commit would re-trigger it forever.
+    paths:
+      - 'docs/adr/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# `cancel-in-progress: false`, unlike adr.yml: a cancelled run here leaves the
+# reports stale rather than merely skipping a comment, and two runs racing to
+# push the same file is the one conflict the rebase below cannot resolve
+# cleanly. Serializing costs a few seconds and removes the case entirely.
+concurrency:
+  group: adr-badge-reports
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    name: Regenerate the corpus reports
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Sole elevated scope: the job commits the two report files to main.
+      # `write` implies read, so there is no separate `contents: read` here.
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          # `adrkit queue` reads the corpus, not history, and the publish step
+          # below builds an orphan commit, so neither needs ancestry. The
+          # default shallow clone is enough.
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: latest
+
+      # --ignore-scripts skips the Prisma postinstall, which needs a
+      # DATABASE_URL that reading markdown records has no use for.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # The upstream recipe fetches `npx @adrkit/cli@x.y.z` here. This runs the
+      # devDependency out of node_modules/.bin instead, for the reason recorded
+      # in ADR-0005 and enforced for the MCP servers by `bun run check:mcp-pins`:
+      # a registry fetch inside a write-capable job gets neither bun.lock's
+      # integrity hash nor the `minimumReleaseAge` quarantine. It also means the
+      # version lives in exactly one place -- package.json -- rather than adding
+      # a sixth pin site that nothing would notice going stale.
+      #
+      # `adrkit`, not the `adr` alias: @adrkit/cli 0.8.0 added the `adrkit` bin
+      # because `adr` on npm belongs to an unrelated package, so a tree that ever
+      # carried both would resolve `.bin/adr` by install order rather than intent.
+      #
+      # Generated into a staging directory so the reports are validated *before*
+      # anything replaces the published files, and never half-written.
+      - name: Generate the reports
+        run: |
+          mkdir -p .adrkit-staging
+          ./node_modules/.bin/adrkit lint --json > .adrkit-staging/lint.json
+          ./node_modules/.bin/adrkit queue --format json > .adrkit-staging/queue.json
+
+      # A truncated or malformed report does not break the badge -- it renders
+      # `no result`, which reads as broken tooling and would go unnoticed until
+      # someone looked. Fail here rather than publish it.
+      - name: Validate before publishing
+        run: bun run adr:check-reports .adrkit-staging
+
+      - name: Publish the validated reports
+        run: |
+          mkdir -p .adrkit
+          mv .adrkit-staging/lint.json .adrkit-staging/queue.json .adrkit/
+          rmdir .adrkit-staging
+
+      # Published to a dedicated `badges` branch, NOT to main.
+      #
+      # The `main` ruleset requires four status checks, and a push straight from
+      # a workflow produces none of them, so pushing here was rejected outright
+      # with GH013. The previous rebase-and-retry loop could not help: the
+      # rejection is a rule violation, not a lost race, so all three attempts
+      # failed identically and the job errored. The ruleset is scoped to
+      # `~DEFAULT_BRANCH`, so any other branch is unrestricted.
+      #
+      # This also removes the reason this job was uneasy about itself: it no
+      # longer writes to the default branch at all.
+      #
+      # The branch holds nothing but these two generated files and has no
+      # history worth keeping, so each run rebuilds it as a single orphan commit
+      # and force-pushes. That is race-free by construction, which rebasing onto
+      # a shared branch never was. `[skip ci]` is gone with it -- no workflow
+      # watches this branch, so there is nothing to suppress.
+      - name: Publish the reports to the badges branch
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # --orphan keeps the working tree (the freshly generated reports) but
+          # starts with no parent, and stages every tracked path. `git reset`
+          # empties that index so the commit below can contain only these two
+          # files -- without it the branch would carry the whole repository.
+          #
+          # `git reset`, not `git rm -r --cached .`: the reports differ from
+          # HEAD at this point (they were just regenerated), and `git rm`
+          # refuses to drop a path whose staged content differs from both the
+          # file and HEAD. It fails, the index survives, and the branch
+          # silently gets everything.
+          git checkout --quiet --orphan badge-reports
+          git reset --quiet
+          git add .adrkit/lint.json .adrkit/queue.json
+          git commit --quiet -m 'chore(adr): refresh corpus badge reports'
+
+          git push --force origin HEAD:badges
+          echo "Published to the badges branch."

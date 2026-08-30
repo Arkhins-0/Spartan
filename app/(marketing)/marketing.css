@@ -1,0 +1,13 @@
+/* Marketing pages — Console design system.
+   Type, colour and surfaces all come from lib/theme.ts; the only thing this
+   stylesheet still owns is anchor-link scrolling on the public pages. */
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

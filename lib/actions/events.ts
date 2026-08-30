@@ -1,0 +1,1127 @@
+"use server";
+
+import { z } from "zod";
+import { prisma } from "@/lib/db/prisma";
+import { getViewableTeamIds, requireTeamAdmin, requireTeamMember, requireUserId } from "@/lib/auth/session";
+import { revalidatePath } from "next/cache";
+import { sendEventNotifications } from "@/lib/email/templates";
+import { canUserAccessVenue as checkVenueAccess } from "@/lib/actions/venues";
+import type { BookingConflict } from "@/types/segments";
+import { FALLBACK_TIME_ZONE } from "@/lib/utils/date";
+import {
+  assignVenueReservation,
+  transitionVenueReservation,
+  VenueReservationConflictError,
+} from "@/lib/services/venue-reservations";
+import { runVenueReservationTransaction } from "@/lib/services/venue-reservation-transaction";
+import {
+  createEventSchema,
+  updateEventSchema,
+  createInterTeamGameSchema,
+  type CreateEventInput,
+  type UpdateEventInput,
+  type CreateInterTeamGameInput,
+} from "@/lib/utils/validation";
+
+export type ActionResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: string; details?: unknown };
+
+/**
+ * Standard venue-conflict warning (006 FR-011): same shape season scheduling
+ * returns, so the "Schedule anyway" override flow works identically in the UI.
+ */
+function bookingConflictFailure(conflicts: BookingConflict[]): {
+  success: false;
+  error: string;
+  details: { conflicts: BookingConflict[] };
+} {
+  return {
+    success: false,
+    error: `This time overlaps ${conflicts.length} existing booking${conflicts.length > 1 ? "s" : ""} at the venue`,
+    details: { conflicts },
+  };
+}
+
+function notifyEventMembers(eventId: string, kind: "created" | "updated"): void {
+  sendEventNotifications(eventId, kind).catch((error) => {
+    console.error(`Failed to send event ${kind} notification emails:`, error);
+  });
+}
+
+
+/**
+ * Create a new event and initialize RSVPs for all team members
+ */
+export async function createEvent(
+  input: CreateEventInput
+): Promise<
+  ActionResult<{
+    id: string;
+    type: string;
+    title: string;
+    startAt: Date;
+    location: string;
+    opponent: string | null;
+    notes: string | null;
+  }>
+> {
+  try {
+    // Validate input
+    const validated = createEventSchema.parse(input);
+
+    // Check authentication and authorization - only ADMIN can create events
+    const currentUserId = await requireTeamAdmin(validated.teamId);
+
+    // Get all team members to initialize RSVPs
+    const allTeamMembers = await prisma.teamMember.findMany({
+      where: {
+        teamId: validated.teamId,
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    const venueId = validated.venueId || null;
+    if (venueId) {
+      const venue = await prisma.venue.findUnique({
+        where: { id: venueId },
+        select: { id: true, name: true, isActive: true, visibility: true, teamId: true, leagueId: true },
+      });
+      if (!venue) {
+        return { success: false, error: "Selected venue not found" };
+      }
+      if (!venue.isActive) {
+        return { success: false, error: "Selected venue is no longer active" };
+      }
+      // Validate team/league has access to this venue
+      const hasAccess = await checkVenueAccess(currentUserId, venue);
+      if (!hasAccess) {
+        return { success: false, error: "Your team does not have access to this venue" };
+      }
+    }
+
+    // If venueId provided, auto-populate location from venue name
+    let location = validated.location;
+    let venueTimezone: string | undefined;
+    if (venueId) {
+      const venue = await prisma.venue.findUnique({ where: { id: venueId }, select: { name: true, timezone: true } });
+      if (venue) {
+        location = venue.name;
+        venueTimezone = venue.timezone;
+      }
+    }
+    // Prefer the zone the client parsed the wall-clock times against so the
+    // stored instant round-trips; fall back to the venue's zone, then the
+    // schema default (never the server runtime zone, which is UTC on Vercel).
+    const timezone = validated.timezone ?? venueTimezone ?? FALLBACK_TIME_ZONE;
+
+    const canonicalReservations = (prisma as typeof prisma & { venueReservation?: unknown }).venueReservation;
+    if (validated.reservationId && (!venueId || !validated.endAt)) {
+      return {
+        success: false,
+        error: "A reservation can only be assigned to a timed venue activity.",
+      };
+    }
+    if (venueId && validated.endAt) {
+      if (!validated.reservationId) {
+        return {
+          success: false,
+          error: "Published venue activities require a confirmed reservation.",
+        };
+      }
+      if (!canonicalReservations) {
+        return {
+          success: false,
+          error: "Published venue activities require canonical reservation support.",
+        };
+      }
+      try {
+        const event = await runVenueReservationTransaction(async (tx) => {
+          const created = await tx.event.create({
+            data: {
+              type: validated.type,
+              title: validated.title,
+              startAt: validated.startAt,
+              endAt: validated.endAt,
+              timezone,
+              location,
+              venueId,
+              opponent: validated.opponent || null,
+              notes: validated.notes || null,
+              teamId: validated.teamId,
+              rsvps: {
+                create: allTeamMembers.map((member: { userId: string }) => ({
+                  userId: member.userId,
+                  status: "NO_RESPONSE",
+                })),
+              },
+            },
+            select: {
+              id: true,
+              type: true,
+              title: true,
+              startAt: true,
+              location: true,
+              opponent: true,
+              notes: true,
+            },
+          });
+          await assignVenueReservation(tx, {
+            reservationId: validated.reservationId!,
+            targetType: "EVENT",
+            targetId: created.id,
+            actorId: currentUserId,
+            overrideConflicts: validated.overrideConflicts,
+            overrideReason: validated.overrideConflicts ? validated.overrideReason : null,
+          });
+          return created;
+        });
+        revalidatePath("/calendar");
+        revalidatePath("/events");
+        notifyEventMembers(event.id, "created");
+        return { success: true, data: event };
+      } catch (error) {
+        if (error instanceof VenueReservationConflictError) {
+          return bookingConflictFailure(error.conflicts as unknown as BookingConflict[]);
+        }
+        throw error;
+      }
+    }
+
+    // Create event with RSVPs for all team members
+    const event = await prisma.event.create({
+      data: {
+        type: validated.type,
+        title: validated.title,
+        startAt: validated.startAt,
+        endAt: validated.endAt || null,
+        timezone,
+        location,
+        venueId,
+        ...(validated.reservationId ? { venueReservationId: validated.reservationId } : {}),
+        opponent: validated.opponent || null,
+        notes: validated.notes || null,
+        teamId: validated.teamId,
+        rsvps: {
+          create: allTeamMembers.map((member: { userId: string }) => ({
+            userId: member.userId,
+            status: "NO_RESPONSE",
+          })),
+        },
+      },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        startAt: true,
+        location: true,
+        opponent: true,
+        notes: true,
+      },
+    });
+
+    // Revalidate calendar and events pages
+    revalidatePath("/calendar");
+    revalidatePath("/events");
+
+    // Send email notifications to all team members (async, don't block response)
+    notifyEventMembers(event.id, "created");
+
+    return {
+      success: true,
+      data: event,
+    };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const fieldErrors = error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join(", ");
+      return {
+        success: false,
+        error: `Validation failed: ${fieldErrors}`,
+        details: error.issues,
+      };
+    }
+
+    console.error("Error creating event:", error);
+
+    return {
+      success: false,
+      error: "Failed to create event. Please try again.",
+    };
+  }
+}
+
+/**
+ * Update an existing event
+ */
+export async function updateEvent(
+  input: UpdateEventInput
+): Promise<
+  ActionResult<{
+    id: string;
+    type: string;
+    title: string;
+    startAt: Date;
+    location: string;
+    opponent: string | null;
+    notes: string | null;
+  }>
+> {
+  try {
+    // Validate input
+    const validated = updateEventSchema.parse(input);
+
+    // Get the event to verify it exists and get team ID
+    const existingEvent = await prisma.event.findUnique({
+      where: { id: validated.id },
+      select: { teamId: true, venueReservationId: true },
+    });
+
+    if (!existingEvent) {
+      return {
+        success: false,
+        error: "Event not found",
+      };
+    }
+
+    // Check authentication and authorization - only ADMIN can update events
+    const currentUserId = await requireTeamAdmin(existingEvent.teamId);
+
+    const venueId = validated.venueId || null;
+    if (venueId) {
+      const venue = await prisma.venue.findUnique({
+        where: { id: venueId },
+        select: { id: true, name: true, isActive: true, visibility: true, teamId: true, leagueId: true },
+      });
+      if (!venue) {
+        return { success: false, error: "Selected venue not found" };
+      }
+      if (!venue.isActive) {
+        return { success: false, error: "Selected venue is no longer active" };
+      }
+      // Validate team/league has access to this venue
+      const hasAccess = await checkVenueAccess(currentUserId, venue);
+      if (!hasAccess) {
+        return { success: false, error: "Your team does not have access to this venue" };
+      }
+    }
+
+    // If venueId provided, auto-populate location from venue name
+    let location = validated.location;
+    let venueTimezone: string | undefined;
+    if (venueId) {
+      const venue = await prisma.venue.findUnique({ where: { id: venueId }, select: { name: true, timezone: true } });
+      if (venue) {
+        location = venue.name;
+        venueTimezone = venue.timezone;
+      }
+    }
+    const timezone = validated.timezone ?? venueTimezone ?? FALLBACK_TIME_ZONE;
+
+    const canonicalReservations = (prisma as typeof prisma & { venueReservation?: unknown }).venueReservation;
+    if (venueId && validated.endAt && !validated.reservationId) {
+      return {
+        success: false,
+        error: "Published venue activities require a confirmed reservation.",
+      };
+    }
+    if (validated.reservationId && (!venueId || !validated.endAt)) {
+      return {
+        success: false,
+        error: "A reservation can only be assigned to a timed venue activity.",
+      };
+    }
+    if (venueId && validated.endAt && !canonicalReservations) {
+      return {
+        success: false,
+        error: "Published venue activities require canonical reservation support.",
+      };
+    }
+    if (
+      existingEvent.venueReservationId
+      && (!venueId || !validated.endAt)
+      && canonicalReservations
+    ) {
+      await runVenueReservationTransaction(async (tx) => {
+        await transitionVenueReservation(tx, {
+          reservationId: existingEvent.venueReservationId!,
+          nextStatus: "CANCELED",
+          actorId: currentUserId,
+          reason: "Team event venue removed",
+          allowAssignedDisposition: true,
+        });
+        await tx.event.update({
+          where: { id: validated.id },
+          data: {
+            type: validated.type,
+            title: validated.title,
+            startAt: validated.startAt,
+            endAt: validated.endAt || null,
+            timezone,
+            location,
+            venueId,
+            opponent: validated.opponent || null,
+            notes: validated.notes || null,
+            venueReservationId: null,
+            conflictOverriddenById: null,
+            conflictOverriddenAt: null,
+          },
+        });
+      });
+      revalidatePath("/calendar");
+      revalidatePath("/events");
+      revalidatePath(`/events/${validated.id}`);
+      notifyEventMembers(validated.id, "updated");
+      return {
+        success: true,
+        data: {
+          id: validated.id,
+          type: validated.type,
+          title: validated.title,
+          startAt: validated.startAt,
+          location,
+          opponent: validated.opponent || null,
+          notes: validated.notes || null,
+        },
+      };
+    }
+
+    if (venueId && validated.endAt && canonicalReservations) {
+      try {
+        const event = await runVenueReservationTransaction(async (tx) => {
+          const reservationChanged =
+            existingEvent.venueReservationId !== validated.reservationId;
+          if (existingEvent.venueReservationId && reservationChanged) {
+            await transitionVenueReservation(tx, {
+              reservationId: existingEvent.venueReservationId,
+              nextStatus: "CANCELED",
+              actorId: currentUserId,
+              reason: "Team event rescheduled",
+              allowAssignedDisposition: true,
+            });
+          }
+          const updated = await tx.event.update({
+            where: { id: validated.id },
+            data: {
+              type: validated.type,
+              title: validated.title,
+              startAt: validated.startAt,
+              endAt: validated.endAt,
+              timezone,
+              location,
+              venueId,
+              opponent: validated.opponent || null,
+              notes: validated.notes || null,
+              venueReservationId:
+                !reservationChanged && existingEvent.venueReservationId
+                  ? existingEvent.venueReservationId
+                  : null,
+              conflictOverriddenById: null,
+              conflictOverriddenAt: null,
+            },
+            select: {
+              id: true,
+              type: true,
+              title: true,
+              startAt: true,
+              location: true,
+              opponent: true,
+              notes: true,
+            },
+          });
+          await assignVenueReservation(tx, {
+            reservationId: validated.reservationId!,
+            targetType: "EVENT",
+            targetId: updated.id,
+            actorId: currentUserId,
+            overrideConflicts: validated.overrideConflicts,
+            overrideReason: validated.overrideConflicts ? validated.overrideReason : null,
+          });
+          return updated;
+        });
+        revalidatePath("/calendar");
+        revalidatePath("/events");
+        revalidatePath(`/events/${validated.id}`);
+        notifyEventMembers(event.id, "updated");
+        return { success: true, data: event };
+      } catch (error) {
+        if (error instanceof VenueReservationConflictError) {
+          return bookingConflictFailure(error.conflicts as unknown as BookingConflict[]);
+        }
+        throw error;
+      }
+    }
+
+    // Update the event
+    const event = await prisma.event.update({
+      where: { id: validated.id },
+      data: {
+        type: validated.type,
+        title: validated.title,
+        startAt: validated.startAt,
+        endAt: validated.endAt || null,
+        timezone,
+        location,
+        venueId,
+        opponent: validated.opponent || null,
+        notes: validated.notes || null,
+        venueReservationId: null,
+      },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        startAt: true,
+        location: true,
+        opponent: true,
+        notes: true,
+      },
+    });
+
+    // Revalidate calendar and events pages
+    revalidatePath("/calendar");
+    revalidatePath("/events");
+    revalidatePath(`/events/${validated.id}`);
+
+    // Send email notifications to all team members (async, don't block response)
+    notifyEventMembers(event.id, "updated");
+
+    return {
+      success: true,
+      data: event,
+    };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const fieldErrors = error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join(", ");
+      return {
+        success: false,
+        error: `Validation failed: ${fieldErrors}`,
+        details: error.issues,
+      };
+    }
+
+    console.error("Error updating event:", error);
+
+    return {
+      success: false,
+      error: "Failed to update event. Please try again.",
+    };
+  }
+}
+
+/**
+ * Delete an event
+ */
+export async function deleteEvent(
+  eventId: string
+): Promise<ActionResult<{ id: string }>> {
+  try {
+    // Get the event to verify it exists and get team ID
+    const existingEvent = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: { teamId: true, venueReservationId: true },
+    });
+
+    if (!existingEvent) {
+      return {
+        success: false,
+        error: "Event not found",
+      };
+    }
+
+    // Check authentication and authorization - only ADMIN can delete events
+    const currentUserId = await requireTeamAdmin(existingEvent.teamId);
+
+    const canonicalReservations = (prisma as typeof prisma & { venueReservation?: unknown }).venueReservation;
+    if (existingEvent.venueReservationId && canonicalReservations) {
+      await runVenueReservationTransaction(async (tx) => {
+        await transitionVenueReservation(tx, {
+          reservationId: existingEvent.venueReservationId!,
+          nextStatus: "CANCELED",
+          actorId: currentUserId,
+          reason: "Team event deleted",
+          allowAssignedDisposition: true,
+        });
+        await tx.event.delete({ where: { id: eventId } });
+      });
+    } else {
+      // Delete the event (RSVPs will be cascade deleted)
+      await prisma.event.delete({
+        where: { id: eventId },
+      });
+    }
+
+    // Send cancellation email after deletion (async, don't block response)
+    sendEventNotifications(eventId, "cancelled").catch((error) => {
+      console.error("Failed to send event cancellation notification emails:", error);
+    });
+
+    // Revalidate calendar and events pages
+    revalidatePath("/calendar");
+    revalidatePath("/events");
+
+    return {
+      success: true,
+      data: { id: eventId },
+    };
+  } catch (error) {
+    console.error("Error deleting event:", error);
+
+    return {
+      success: false,
+      error: "Failed to delete event. Please try again.",
+    };
+  }
+}
+
+/**
+ * Get all events for a team
+ */
+export async function getTeamEvents(teamId: string) {
+  try {
+    // Check authentication and authorization - user must be a team member
+    await requireTeamMember(teamId);
+
+    const events = await prisma.event.findMany({
+      where: {
+        teamId,
+      },
+      orderBy: {
+        startAt: "asc",
+      },
+      select: {
+        id: true,
+        type: true,
+        title: true,
+        startAt: true,
+        location: true,
+        opponent: true,
+        notes: true,
+        _count: {
+          select: {
+            rsvps: true,
+          },
+        },
+      },
+    });
+
+    return events;
+  } catch (error) {
+    console.error("Error fetching team events:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get a single event with full details including RSVPs
+ */
+export async function getEvent(eventId: string) {
+  try {
+    const event = await prisma.event.findUnique({
+      where: { id: eventId },
+      include: {
+        team: {
+          select: {
+            id: true,
+            name: true,
+            leagueId: true,
+          },
+        },
+        rsvps: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+            // Per-child rows (identity graph): playerId is a scalar on the
+            // row; include the player so attendance UIs can render the
+            // child's name with "answered by" attribution.
+            player: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!event) {
+      return null;
+    }
+
+    // Check authentication and authorization, and get user's role in one go.
+    const userId = await requireUserId();
+    const teamMember = await prisma.teamMember.findUnique({
+      where: {
+        userId_teamId: {
+          userId,
+          teamId: event.teamId,
+        },
+      },
+      select: {
+        role: true,
+      },
+    });
+
+    const eventLeagueId = event.leagueId ?? event.team.leagueId;
+    const leagueAdmin = !teamMember && eventLeagueId
+      ? await prisma.leagueUser.findFirst({
+          where: {
+            userId,
+            leagueId: eventLeagueId,
+            role: "LEAGUE_ADMIN",
+            league: { isActive: true },
+          },
+          select: { role: true },
+        })
+      : null;
+
+    // Guardian-only viewers (a parent linked to a rostered Player via
+    // PlayerGuardian, but NOT a TeamMember) may VIEW their child's team events
+    // at MEMBER-level detail. Since the direct-member lookup above already
+    // failed, inclusion in the viewable set can only come from a guardian link.
+    // They never get self-RSVP or management controls here — per-child RSVP
+    // stays on its own guarded flow.
+    const isGuardianViewer =
+      !teamMember && !leagueAdmin
+        ? (await getViewableTeamIds(userId)).includes(event.teamId)
+        : false;
+
+    // Direct team members can RSVP; league admins can inspect league events
+    // without receiving broken RSVP/edit/delete controls for teams they do not belong to.
+    if (!teamMember && !leagueAdmin && !isGuardianViewer) {
+      return null;
+    }
+
+    return {
+      ...event,
+      userRole: teamMember?.role ?? (leagueAdmin ? "LEAGUE_ADMIN" : "MEMBER"),
+      canRSVP: !!teamMember,
+      canManageEvent: teamMember?.role === "ADMIN",
+    };
+  } catch (error) {
+    console.error("Error fetching event:", error);
+    throw error;
+  }
+}
+
+/**
+ * Create an inter-team game with conflict detection and automatic RSVP creation
+ */
+export async function createInterTeamGame(
+  input: CreateInterTeamGameInput
+): Promise<
+  ActionResult<{
+    id: string;
+    title: string;
+    startAt: Date;
+    location: string;
+    notes: string | null;
+    homeTeam: { id: string; name: string };
+    awayTeam: { id: string; name: string };
+    conflicts?: Array<{
+      teamId: string;
+      teamName: string;
+      conflictingEvent: {
+        id: string;
+        title: string;
+        startAt: Date;
+      };
+    }>;
+  }>
+> {
+  try {
+    // Validate input
+    const validated = createInterTeamGameSchema.parse(input);
+
+    // Check authentication and authorization - user must be league admin or admin of one of the teams
+    const userId = await requireUserId();
+
+    // Import league actions for authorization helpers
+    const { verifyLeagueAdmin, verifyTeamAdminInLeague } = await import("@/lib/actions/league");
+
+    const isLeagueAdmin = await verifyLeagueAdmin(validated.leagueId, userId);
+    const isHomeTeamAdmin = await verifyTeamAdminInLeague(validated.homeTeamId, validated.leagueId, userId);
+    const isAwayTeamAdmin = await verifyTeamAdminInLeague(validated.awayTeamId, validated.leagueId, userId);
+
+    if (!isLeagueAdmin && !isHomeTeamAdmin && !isAwayTeamAdmin) {
+      return {
+        success: false,
+        error: "Unauthorized - you must be a league admin or admin of one of the teams",
+      };
+    }
+
+    // Verify both teams exist and belong to the league
+    const teams = await prisma.team.findMany({
+      where: {
+        id: { in: [validated.homeTeamId, validated.awayTeamId] },
+        leagueId: validated.leagueId,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    if (teams.length !== 2) {
+      return {
+        success: false,
+        error: "One or both teams not found or do not belong to this league",
+      };
+    }
+
+    const homeTeam = teams.find(t => t.id === validated.homeTeamId);
+    const awayTeam = teams.find(t => t.id === validated.awayTeamId);
+    if (!homeTeam || !awayTeam) {
+      return {
+        success: false,
+        error: "One or both teams not found or do not belong to this league",
+      };
+    }
+
+    // Check for scheduling conflicts
+    const conflicts = await detectSchedulingConflicts(validated);
+
+    if (conflicts.length > 0 && !validated.overrideConflicts) {
+      // Generate alternative time suggestions
+      const suggestions = await generateAlternativeTimeSlots(validated);
+
+      return {
+        success: false,
+        error: "Scheduling conflicts detected",
+        details: {
+          conflicts,
+          suggestions,
+          canOverride: isLeagueAdmin, // Only league admins can override conflicts
+        },
+      };
+    }
+
+    // Get all team members from both teams to initialize RSVPs
+    const allTeamMembers = await prisma.teamMember.findMany({
+      where: {
+        teamId: { in: [validated.homeTeamId, validated.awayTeamId] },
+      },
+      select: {
+        userId: true,
+      },
+    });
+
+    // Create the inter-team game event
+    const event = await prisma.event.create({
+      data: {
+        type: "GAME",
+        title: validated.title,
+        startAt: validated.startAt,
+        timezone: validated.timezone ?? FALLBACK_TIME_ZONE,
+        location: validated.location,
+        notes: validated.notes || null,
+        leagueId: validated.leagueId,
+        teamId: validated.homeTeamId, // Primary team for backward compatibility
+        homeTeamId: validated.homeTeamId,
+        awayTeamId: validated.awayTeamId,
+        rsvps: {
+          create: allTeamMembers.map((member: { userId: string }) => ({
+            userId: member.userId,
+            status: "NO_RESPONSE",
+          })),
+        },
+      },
+      select: {
+        id: true,
+        title: true,
+        startAt: true,
+        location: true,
+        notes: true,
+      },
+    });
+
+    // Revalidate relevant pages
+    revalidatePath("/calendar");
+    revalidatePath("/events");
+    revalidatePath(`/league/${validated.leagueId}/schedule`);
+
+    // Send email notifications to both teams (async, don't block response)
+    sendEventNotifications(event.id, "created").catch((error) => {
+      console.error("Failed to send inter-team game notification emails:", error);
+    });
+
+    return {
+      success: true,
+      data: {
+        ...event,
+        homeTeam,
+        awayTeam,
+      },
+    };
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const fieldErrors = error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join(", ");
+      return {
+        success: false,
+        error: `Validation failed: ${fieldErrors}`,
+        details: error.issues,
+      };
+    }
+
+    console.error("Error creating inter-team game:", error);
+
+    return {
+      success: false,
+      error: "Failed to create inter-team game. Please try again.",
+    };
+  }
+}
+
+/**
+ * Detect scheduling conflicts for inter-team games
+ */
+async function detectSchedulingConflicts(
+  gameData: CreateInterTeamGameInput
+): Promise<Array<{
+  teamId: string;
+  teamName: string;
+  conflictingEvent: {
+    id: string;
+    title: string;
+    startAt: Date;
+  };
+}>> {
+  const conflicts: Array<{
+    teamId: string;
+    teamName: string;
+    conflictingEvent: {
+      id: string;
+      title: string;
+      startAt: Date;
+    };
+  }> = [];
+
+  // Define conflict window (2 hours before and after the game)
+  const conflictWindowStart = new Date(gameData.startAt.getTime() - 2 * 60 * 60 * 1000);
+  const conflictWindowEnd = new Date(gameData.startAt.getTime() + 2 * 60 * 60 * 1000);
+
+  // Check for conflicts for both teams
+  const conflictingEvents = await prisma.event.findMany({
+    where: {
+      OR: [
+        { teamId: gameData.homeTeamId },
+        { teamId: gameData.awayTeamId },
+        { homeTeamId: gameData.homeTeamId },
+        { awayTeamId: gameData.homeTeamId },
+        { homeTeamId: gameData.awayTeamId },
+        { awayTeamId: gameData.awayTeamId },
+      ],
+      startAt: {
+        gte: conflictWindowStart,
+        lte: conflictWindowEnd,
+      },
+    },
+    include: {
+      team: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      homeTeam: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      awayTeam: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  // Fetch team names once to avoid N+1 queries
+  const [homeTeamInfo, awayTeamInfo] = await Promise.all([
+    prisma.team.findUnique({ where: { id: gameData.homeTeamId }, select: { name: true } }),
+    prisma.team.findUnique({ where: { id: gameData.awayTeamId }, select: { name: true } }),
+  ]);
+
+  // Process conflicts for each team
+  for (const event of conflictingEvents) {
+    // Check if home team has conflict
+    if (homeTeamInfo && (event.teamId === gameData.homeTeamId ||
+        event.homeTeamId === gameData.homeTeamId ||
+        event.awayTeamId === gameData.homeTeamId)) {
+      conflicts.push({
+        teamId: gameData.homeTeamId,
+        teamName: homeTeamInfo.name,
+        conflictingEvent: {
+          id: event.id,
+          title: event.title,
+          startAt: event.startAt,
+        },
+      });
+    }
+
+    // Check if away team has conflict
+    if (awayTeamInfo && (event.teamId === gameData.awayTeamId ||
+        event.homeTeamId === gameData.awayTeamId ||
+        event.awayTeamId === gameData.awayTeamId)) {
+      conflicts.push({
+        teamId: gameData.awayTeamId,
+        teamName: awayTeamInfo.name,
+        conflictingEvent: {
+          id: event.id,
+          title: event.title,
+          startAt: event.startAt,
+        },
+      });
+    }
+  }
+
+  // Remove duplicates
+  const uniqueConflicts = conflicts.filter((conflict, index, self) =>
+    index === self.findIndex(c =>
+      c.teamId === conflict.teamId &&
+      c.conflictingEvent.id === conflict.conflictingEvent.id
+    )
+  );
+
+  return uniqueConflicts;
+}
+
+/**
+ * Generate alternative time slots when conflicts are detected
+ * Optimized to fetch all events once and check conflicts in memory
+ */
+async function generateAlternativeTimeSlots(
+  gameData: CreateInterTeamGameInput
+): Promise<Array<{
+  startAt: Date;
+  reason: string;
+}>> {
+  const suggestions: Array<{
+    startAt: Date;
+    reason: string;
+  }> = [];
+
+  const originalDate = new Date(gameData.startAt);
+
+  // Fetch all events for both teams over the next 7 days once
+  const startRange = new Date(originalDate);
+  startRange.setHours(0, 0, 0, 0); // Start of current day
+  const endRange = new Date(startRange);
+  endRange.setDate(endRange.getDate() + 7); // 7 days ahead
+
+  const allEvents = await prisma.event.findMany({
+    where: {
+      OR: [
+        { teamId: gameData.homeTeamId },
+        { teamId: gameData.awayTeamId },
+        { homeTeamId: gameData.homeTeamId },
+        { awayTeamId: gameData.homeTeamId },
+        { homeTeamId: gameData.awayTeamId },
+        { awayTeamId: gameData.awayTeamId },
+      ],
+      startAt: {
+        gte: startRange,
+        lte: endRange,
+      },
+    },
+    select: {
+      id: true,
+      startAt: true,
+      teamId: true,
+      homeTeamId: true,
+      awayTeamId: true,
+    },
+  });
+
+  // Helper function to check conflicts in memory
+  const hasConflict = (testTime: Date): boolean => {
+    const conflictWindowStart = new Date(testTime.getTime() - 2 * 60 * 60 * 1000);
+    const conflictWindowEnd = new Date(testTime.getTime() + 2 * 60 * 60 * 1000);
+
+    return allEvents.some(event => {
+      const eventTime = new Date(event.startAt).getTime();
+      if (eventTime < conflictWindowStart.getTime() || eventTime > conflictWindowEnd.getTime()) {
+        return false;
+      }
+
+      // Check if either team is involved in this event
+      return (
+        event.teamId === gameData.homeTeamId ||
+        event.teamId === gameData.awayTeamId ||
+        event.homeTeamId === gameData.homeTeamId ||
+        event.awayTeamId === gameData.homeTeamId ||
+        event.homeTeamId === gameData.awayTeamId ||
+        event.awayTeamId === gameData.awayTeamId
+      );
+    });
+  };
+
+  // Generate suggestions for the same day at different times
+  const timeSlots = [
+    { hour: 9, minute: 0, label: "9:00 AM" },
+    { hour: 11, minute: 0, label: "11:00 AM" },
+    { hour: 14, minute: 0, label: "2:00 PM" },
+    { hour: 16, minute: 0, label: "4:00 PM" },
+    { hour: 18, minute: 0, label: "6:00 PM" },
+    { hour: 19, minute: 30, label: "7:30 PM" },
+  ];
+
+  // Check same day alternatives
+  for (const slot of timeSlots) {
+    const alternativeTime = new Date(originalDate);
+    alternativeTime.setHours(slot.hour, slot.minute, 0, 0);
+
+    // Skip if it's the same time as requested
+    if (alternativeTime.getTime() === originalDate.getTime()) continue;
+
+    // Skip if it's in the past
+    if (alternativeTime <= new Date()) continue;
+
+    // Check if this time has conflicts (in memory)
+    if (!hasConflict(alternativeTime)) {
+      suggestions.push({
+        startAt: alternativeTime,
+        reason: `Same day at ${slot.label}`,
+      });
+    }
+  }
+
+  // Generate suggestions for the next few days
+  for (let dayOffset = 1; dayOffset <= 7; dayOffset++) {
+    const alternativeDate = new Date(originalDate);
+    alternativeDate.setDate(alternativeDate.getDate() + dayOffset);
+
+    // Check if this time has conflicts (in memory)
+    if (!hasConflict(alternativeDate)) {
+      const dayName = alternativeDate.toLocaleDateString('en-US', { weekday: 'long' });
+      suggestions.push({
+        startAt: alternativeDate,
+        reason: `${dayName} at same time`,
+      });
+
+      // Limit to 3 day suggestions to avoid overwhelming the user
+      if (suggestions.filter(s => s.reason.includes('at same time')).length >= 3) {
+        break;
+      }
+    }
+  }
+
+  // Limit total suggestions to 5
+  return suggestions.slice(0, 5);
+}

@@ -1,0 +1,76 @@
+name: Deployment Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'vercel.json'
+      - '.env.example'
+      - 'DEPLOYMENT.md'
+      - 'package.json'
+      - 'bun.lock'
+      - 'scripts/build-docs-pages.ts'
+      - 'scripts/check-uptime.ts'
+      - 'scripts/validate-deployment-config.ts'
+      - '.github/workflows/deployment-checks.yml'
+      - '.github/workflows/docs-pages.yml'
+      - '.github/workflows/uptime-monitoring.yml'
+      - '.github/workflows/cron-jobs.yml'
+      - 'app/api/cron/**'
+      - 'app/docs/**'
+      - 'docs/**'
+      - 'lib/docs/**'
+      # The ADR corpus is not published by the docs build (only top-level
+      # docs/*.md are), so it cannot change deployment output.
+      - '!docs/adr/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'vercel.json'
+      - '.env.example'
+      - 'DEPLOYMENT.md'
+      - 'package.json'
+      - 'bun.lock'
+      - 'scripts/build-docs-pages.ts'
+      - 'scripts/check-uptime.ts'
+      - 'scripts/validate-deployment-config.ts'
+      - '.github/workflows/deployment-checks.yml'
+      - '.github/workflows/docs-pages.yml'
+      - '.github/workflows/uptime-monitoring.yml'
+      - '.github/workflows/cron-jobs.yml'
+      - 'app/api/cron/**'
+      - 'app/docs/**'
+      - 'docs/**'
+      - 'lib/docs/**'
+      # The ADR corpus is not published by the docs build (only top-level
+      # docs/*.md are), so it cannot change deployment output.
+      - '!docs/adr/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deployment-readiness:
+    name: Deployment readiness
+    runs-on: ubuntu-latest
+    env:
+      # Prisma client generation runs during bun install. A real secret is used
+      # when available; the fallback only satisfies generate-time URL parsing.
+      DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/spartan_ci' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate deployment configuration
+        run: bun run deployment:check

@@ -1,0 +1,132 @@
+name: Scheduled jobs
+
+# Replaces Vercel Cron (Hobby plans only allow once-daily schedules).
+# Each job curls its /api/cron/* route with the CRON_SECRET bearer token the
+# route already requires. GitHub delays scheduled runs by a few minutes under
+# load, and drops them entirely on repositories with no activity for 60 days —
+# every route is idempotent and catches up on its next run, so a missed tick
+# is harmless.
+#
+# Required secret:   CRON_SECRET        (same value as the Vercel env var)
+# Optional variable: CRON_TARGET_URL    (defaults to the production site)
+
+on:
+  schedule:
+    - cron: '0 * * * *'     # rsvp-reminders — hourly
+    - cron: '0 8 * * *'     # notification-batches — daily 08:00 UTC
+    - cron: '*/10 * * * *'  # event-waitlist — every 10 min
+    - cron: '*/15 * * * *'  # gear-notifications + volunteer-reminders — every 15 min
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Which job to run'
+        required: true
+        type: choice
+        options:
+          - all
+          - rsvp-reminders
+          - notification-batches
+          - event-waitlist
+          - gear-notifications
+          - volunteer-reminders
+
+permissions: {}
+
+env:
+  TARGET_URL: ${{ vars.CRON_TARGET_URL || 'https://spartan.arkhins.com' }}
+
+jobs:
+  rsvp-reminders:
+    if: >-
+      github.event.schedule == '0 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && contains(fromJSON('["all","rsvp-reminders"]'), inputs.job))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cron-rsvp-reminders
+      cancel-in-progress: false
+    steps:
+      - name: Trigger /api/cron/rsvp-reminders
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET" || { echo "::error::CRON_SECRET secret is not set"; exit 1; }
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$TARGET_URL/api/cron/rsvp-reminders"
+
+  notification-batches:
+    if: >-
+      github.event.schedule == '0 8 * * *' ||
+      (github.event_name == 'workflow_dispatch' && contains(fromJSON('["all","notification-batches"]'), inputs.job))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cron-notification-batches
+      cancel-in-progress: false
+    steps:
+      - name: Trigger /api/cron/notification-batches
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET" || { echo "::error::CRON_SECRET secret is not set"; exit 1; }
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$TARGET_URL/api/cron/notification-batches"
+
+  event-waitlist:
+    if: >-
+      github.event.schedule == '*/10 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && contains(fromJSON('["all","event-waitlist"]'), inputs.job))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cron-event-waitlist
+      cancel-in-progress: false
+    steps:
+      - name: Trigger /api/cron/event-waitlist
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET" || { echo "::error::CRON_SECRET secret is not set"; exit 1; }
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$TARGET_URL/api/cron/event-waitlist"
+
+  gear-notifications:
+    if: >-
+      github.event.schedule == '*/15 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && contains(fromJSON('["all","gear-notifications"]'), inputs.job))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cron-gear-notifications
+      cancel-in-progress: false
+    steps:
+      - name: Trigger /api/cron/gear-notifications
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET" || { echo "::error::CRON_SECRET secret is not set"; exit 1; }
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$TARGET_URL/api/cron/gear-notifications"
+
+  volunteer-reminders:
+    if: >-
+      github.event.schedule == '*/15 * * * *' ||
+      (github.event_name == 'workflow_dispatch' && contains(fromJSON('["all","volunteer-reminders"]'), inputs.job))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cron-volunteer-reminders
+      cancel-in-progress: false
+    steps:
+      - name: Trigger /api/cron/volunteer-reminders
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET" || { echo "::error::CRON_SECRET secret is not set"; exit 1; }
+          curl --fail-with-body --silent --show-error --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "$TARGET_URL/api/cron/volunteer-reminders"
